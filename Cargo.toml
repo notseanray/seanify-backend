@@ -1,0 +1,38 @@
+[package]
+name = "seanify"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sean Ray <seanray410@gmail.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+sqlx = { version = "0.5.13", features = ["runtime-async-std-native-tls" , "postgres", "bigdecimal"] }
+warp = { version = "0.3.2", features = ["tokio-rustls", "compression-gzip", "compression", "tls"] }
+futures-util = { version = "0.3", default-features=false }
+tokio = { version = "1.17.0", features = ["rt-multi-thread", "sync", "fs", "macros"] }
+anyhow = "1.0.56"
+log = { version = "0.4.16", features = ["max_level_debug", "release_max_level_warn"] }
+dotenv = "0.15.0"
+pretty_env_logger = "0.4"
+seahash = "4.1.0"
+tokio-stream = "0.1.6"
+uuid = { version = "0.8.2", features = ["v4"] }
+lazy_static = "1.4.0"
+async_once = "0.2.6"
+youtube_dl = { version = "0.7.0", features = ["yt-dlp", "tokio"], default-features=false }
+
+[profile.dev.package.sqlx-macros]
+opt-level = 3
+
+[profile.dev]
+profile-rustflags = [
+	"-C", "link-arg=-fuse-ld=lld"
+]
+
+[profile.release]
+profile-rustflags = [
+	"-C", "link-arg=-fuse-ld=lld"
+]
+strip = "debuginfo"
+panic = "abort"

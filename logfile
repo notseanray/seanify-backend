@@ -1,0 +1,19 @@
+2022-04-18 10:21:11.226 EDT [9454] LOG:  invalid value for parameter "lc_messages": "C.utf8"
+2022-04-18 10:21:11.226 EDT [9454] LOG:  invalid value for parameter "lc_monetary": "C.utf8"
+2022-04-18 10:21:11.226 EDT [9454] LOG:  invalid value for parameter "lc_numeric": "C.utf8"
+2022-04-18 10:21:11.226 EDT [9454] LOG:  invalid value for parameter "lc_time": "C.utf8"
+2022-04-18 10:21:11.226 EDT [9454] FATAL:  configuration file "/home/sean/Desktop/stuff/seanify-dev/./db-data/postgresql.conf" contains errors
+2022-04-18 10:22:23.765 EDT [9532] LOG:  invalid value for parameter "lc_messages": "C.utf8"
+2022-04-18 10:22:23.765 EDT [9532] LOG:  invalid value for parameter "lc_monetary": "C.utf8"
+2022-04-18 10:22:23.765 EDT [9532] LOG:  invalid value for parameter "lc_numeric": "C.utf8"
+2022-04-18 10:22:23.765 EDT [9532] LOG:  invalid value for parameter "lc_time": "C.utf8"
+2022-04-18 10:22:23.765 EDT [9532] FATAL:  configuration file "/home/sean/Desktop/stuff/seanify-dev/./db-data/postgresql.conf" contains errors
+2022-04-18 10:23:24.564 EDT [9739] LOG:  invalid value for parameter "lc_messages": "C.utf8"
+2022-04-18 10:23:24.565 EDT [9739] LOG:  invalid value for parameter "lc_monetary": "C.utf8"
+2022-04-18 10:23:24.565 EDT [9739] LOG:  invalid value for parameter "lc_numeric": "C.utf8"
+2022-04-18 10:23:24.565 EDT [9739] LOG:  invalid value for parameter "lc_time": "C.utf8"
+2022-04-18 10:23:24.565 EDT [9739] FATAL:  configuration file "/home/sean/Desktop/stuff/seanify-dev/db-data/postgresql.conf" contains errors
+2022-04-18 10:24:37.336 EDT [9892] FATAL:  data directory "/home/sean/Desktop/stuff/seanify-dev/db-data" has invalid permissions
+2022-04-18 10:24:37.336 EDT [9892] DETAIL:  Permissions should be u=rwx (0700) or u=rwx,g=rx (0750).
+2022-04-18 10:24:59.434 EDT [9954] FATAL:  could not open directory "pg_notify": No such file or directory
+2022-04-18 10:24:59.435 EDT [9954] LOG:  database system is shut down
