@@ -1,5 +1,7 @@
 use crate::BigD;
-use serde::{Deserialize, Serialize};
+use std::error::Error;
+use sqlx::{Database, Decode};
+use sqlx::database::HasValueRef;
 use serde_json::Result;
 
 // To insert into postgres they must be of all optional type which is slightly inconvient
@@ -8,42 +10,66 @@ use serde_json::Result;
  * This is part of the userdata even though it does store a song name, so I've given it slightly
  * different names to tell them apart easily 
  */
-#[derive(Serialize, Deserialize)]
+#[derive(sqlx::FromRow)]
 pub(crate) struct SongInPlaylist {
-    song_hash: Option<u64>,
-    date_added: Option<u64>,
-    custom_name: Option<String> // limit to 100 char
+    pub song_hash: Option<BigD>,
+    pub date_added: Option<BigD>,
+    pub custom_name: Option<String> // limit to 100 char
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(sqlx::FromRow)]
 pub(crate) struct Playlist {
-    name: Option<String>, // limit to 30 char
-    description: Option<String>, // limit to 100 char
-    public: Option<bool>,
-    last_update: Option<u64>,
-    songs: Option<Vec<SongInPlaylist>>
+    pub name: Option<String>, // limit to 30 char
+    pub description: Option<String>, // limit to 100 char
+    pub image: Option<String>, // limit to 200 char
+    pub public_playlist: Option<bool>,
+    pub last_update: Option<u64>,
+    pub playlist_songs: Option<Vec<SongInPlaylist>>
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(sqlx::FromRow)]
 pub(crate) struct UserData {
-    public: Option<bool>,
-    playlist: Option<Vec<Playlist>>,
-    display_name: Option<String>, //limit to 30 char
-    share_status: Option<bool>,
-    now_playing: Option<String>, // keep under 50 char
-    recent_plays: Option<Vec<String>>,
-    followers: Option<Vec<String>>, // vec of display_name
-    following: Option<Vec<String>>
+    pub public_profile: Option<bool>,
+    pub playlist: Option<Vec<Playlist>>,
+    pub display_name: Option<String>, //limit to 30 char
+    pub share_status: Option<bool>,
+    pub now_playing: Option<String>, // keep under 50 char
+    pub public_status: Option<String>,
+    pub recent_plays: Option<Vec<String>>,
+    pub followers: Option<Vec<String>>, // vec of display_name
+    pub following: Option<Vec<String>>
 }
 
+#[derive(sqlx::FromRow)]
 pub(crate) struct AuthData {
-    _username: Option<BigD>,
-    _password: Option<BigD>,
-    userdata: Option<UserData>,
-    admin: Option<bool>
+    pub username: BigD,
+    pub password: BigD,
+    pub admin: bool,
+    pub last_login: Option<BigD>,
+    pub userdata: Option<UserData>
 }
 
-/*
+impl<'r, DB: Database> Decode<'r, DB> for AuthData
+where
+    &'r str: Decode<'r, DB>
+{
+    fn decode(
+        value: <DB as HasValueRef<'r>>::ValueRef,
+    ) -> Result<Self, Box<dyn Error + 'static + Send + Sync>> {
+        // the interface of ValueRef is largely unstable at the moment
+        // so this is not directly implementable
+
+        // however, you can delegate to a type that matches the format of the type you want
+        // to decode (such as a UTF-8 string)
+
+        let value = <&str as Decode<DB>>::decode(value)?;
+
+        // now you can parse this into your type (assuming there is a `FromStr`)
+
+        Ok(value.parse()?)
+    }
+}
+
 macro_rules! truncate {
     ($val:expr, $len:expr) => {
         match $val {
@@ -60,8 +86,8 @@ macro_rules! truncate {
         }
     };
 }
-*/
 
+/*
 impl UserData {
     pub(crate) fn new() -> Self {
         Self {
@@ -75,5 +101,4 @@ impl UserData {
             following: Some(Vec::new())
         }
     }
-
-}
+}*/

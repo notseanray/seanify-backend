@@ -1,3 +1,4 @@
+use crate::{AuthData, aquire_db, DB, UserData};
 use log::{error, info, LevelFilter};
 use seahash::hash;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
@@ -26,6 +27,11 @@ struct UserAuth {
 // from the database output we must have a struct
 struct Exists {
     pub exists: Option<bool>
+}
+
+#[derive(sqlx::FromRow)]
+struct Wrapper {
+    pub result: Option<AuthData>
 }
 
 // Hash the username and password then return, update the last login time
@@ -207,6 +213,26 @@ SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);
             None => false
         })
     }
+
+    /*
+    pub async fn get_user_data(
+        &self,
+        userhash: u64
+    ) -> anyhow::Result<()> {
+        let data = sqlx::query_as!(
+            AuthData,
+            r#"
+SELECT username, password, admin, last_login, userdata as "userdata: UserData"
+FROM auth
+WHERE username = $1
+            "#,
+            BigD::from(userhash)
+            )
+            .fetch_optional(&mut self.database.acquire().await?)
+            .await?;
+        Ok(())
+    }
+    */
 
     pub async fn update_login_timestamp(
         &self,
