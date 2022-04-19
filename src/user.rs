@@ -28,7 +28,6 @@ pub(crate) struct Playlist {
 pub(crate) struct UserData {
     public: Option<bool>,
     playlist: Option<Vec<Playlist>>,
-    friend_status: Option<bool>,
     display_name: Option<String>, //limit to 30 char
     share_status: Option<bool>,
     now_playing: Option<String>, // keep under 50 char
@@ -68,7 +67,6 @@ impl UserData {
         Self {
             public: Some(false),
             playlist: None,
-            friend_status: Some(false),
             display_name: None,
             share_status: Some(false),
             now_playing: None,

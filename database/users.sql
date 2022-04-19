@@ -17,7 +17,6 @@ CREATE TYPE Playlist AS (
 CREATE TYPE UserData AS (
 	pub BOOL,
 	playlists Playlist[],
-	friend_status BOOL,
 	display_name TEXT,
 	share_status BOOL,
 	now_playing TEXT,
