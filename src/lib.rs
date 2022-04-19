@@ -11,7 +11,7 @@ use async_once::AsyncOnce;
 use dotenv;
 use futures_util::{FutureExt, StreamExt};
 use lazy_static::lazy_static;
-use log::{error, info, warn, debug};
+use log::{debug, error, info, warn};
 use std::convert::Infallible;
 use std::env;
 use std::sync::Arc;
@@ -69,7 +69,7 @@ static CLIENT_COMMANDS: [&'static str; 6] =
  * While the websocket clients are conneted we store an object so we can send to them
  * auth is used, as the name implies, for authentication
  * If a user does not authenticate on the first message over the websocket we remove them
- * immediately after logging their ip(TODO implement rate limiting) to prevent answering 
+ * immediately after logging their ip(TODO implement rate limiting) to prevent answering
  * unnecessary request
  *
  * The username_hash is used to communicate with other instances of itself
@@ -81,7 +81,7 @@ pub(crate) struct WsClient {
     pub username_hash: u64,
 }
 
-// We store the websocket clients in this hashmap, the string being a uuid 
+// We store the websocket clients in this hashmap, the string being a uuid
 pub(crate) type Clients = Arc<Mutex<HashMap<String, WsClient>>>;
 pub type Result<T> = std::result::Result<T, Rejection>;
 
@@ -92,7 +92,7 @@ async fn ws_handler(ws: warp::ws::Ws, clients: Clients) -> Result<impl Reply> {
 #[macro_export]
 macro_rules! aquire_db {
     ($val:expr) => {
-        &DB.get().await 
+        &$val.get().await
     };
 }
 
@@ -110,7 +110,9 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
                 let args = msg.split(" ").collect::<Vec<&str>>();
                 match args[0] {
                     "AUTH" => {
-                        if args.len() != 3 && !(args.len() == 4 && args[3] == &ADMIN_KEY.to_string()) {
+                        if args.len() != 3
+                            && !(args.len() == 4 && args[3] == &ADMIN_KEY.to_string())
+                        {
                             // TODO CUSTOM ERROR
                             warn!("invalid args");
                             return;
@@ -130,9 +132,13 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
                                         }
                                     };
                                     v.auth = true;
-                                    let _ = aquire_db!(DB).update_login_timestamp(v.username_hash).await;
+                                    let _ = aquire_db!(DB)
+                                        .update_login_timestamp(v.username_hash)
+                                        .await;
                                     if args.len() == 4 && args[3] == &ADMIN_KEY.to_string() {
-                                        if let Ok(admin) = aquire_db!(DB).is_admin(v.username_hash).await {
+                                        if let Ok(admin) =
+                                            aquire_db!(DB).is_admin(v.username_hash).await
+                                        {
                                             // there are definitely better ways to do this
                                             if admin {
                                                 v.admin = true;
@@ -196,9 +202,9 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
 
 /*
  * Handle new client connection, we assign the new client a uuid and fill out some fields for it
- * 
+ *
  * Fields:
- * - sender         = used to access the client and send to it 
+ * - sender         = used to access the client and send to it
  * - auth           = determines if the client is authenticated
  * - username_hash  = hash of username to identify the client
  *
@@ -216,7 +222,7 @@ async fn client_connection(ws: WebSocket, clients: Clients) {
         }
     }));
     let uuid = Uuid::new_v4().to_simple().to_string();
-    // uuid v4 is 36 characters long 
+    // uuid v4 is 36 characters long
     let mut mapped_uuid = String::with_capacity(36);
     // I read in a book on rust clone from is faster, though I'm not really sure if this is true
     mapped_uuid.clone_from(&uuid);
@@ -266,7 +272,7 @@ async fn handle_response<'a>(
     msg: &str,
     ws_client: &WsClient,
     clients: &Clients,
-    client_uuid: &str
+    client_uuid: &str,
 ) -> Option<&'a str> {
     debug!("{msg}");
     if let Some(v) = msg.find(" ") {
@@ -283,18 +289,16 @@ async fn handle_response<'a>(
                 let mut locked = SONG_MANAGER.lock().await;
                 locked.request(message.to_string());
                 None
-            },
+            }
             "SEARCH" => {
                 unimplemented!();
-            },
-            "REQUEST_DATA" => {
-                None
-            },
+            }
+            "REQUEST_DATA" => None,
             "CLOSE" => {
                 let mut locked = clients.lock().await;
                 let client = match locked.get(client_uuid) {
                     Some(v) => v,
-                    None => return None
+                    None => return None,
                 };
                 // Close the connection to the websocket
                 if let Some(sender) = &client.sender {
@@ -303,7 +307,7 @@ async fn handle_response<'a>(
                 locked.remove(client_uuid);
                 info!("{client_uuid} disconnected");
                 None
-            },
+            }
             _ => None,
         };
     }
@@ -338,25 +342,39 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
     // 5 second default
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(env_num_or_default!("QUEUE_COOLDOWN", DEFAULT_QUEUE_COOLDOWN).into())).await;
+            tokio::time::sleep(Duration::from_secs(
+                env_num_or_default!("QUEUE_COOLDOWN", DEFAULT_QUEUE_COOLDOWN).into(),
+            ))
+            .await;
             let mut locked = SONG_MANAGER.lock().await;
             let _ = locked.cycle_queue().await;
         }
     });
 
     let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
+
     let ws_route = warp::path("seanify")
         .and(warp::ws())
         .and(with_clients(clients.clone()))
         .and_then(ws_handler);
+
     let routes = ws_route.with(warp::cors().allow_any_origin());
 
     let music = warp::path(INSTANCE_KEY.to_string())
         .and(warp::fs::dir(CACHE_DIR.to_string()))
         .with(warp::compression::gzip());
 
+    let cdn = warp::path(format!("{}-cdn", INSTANCE_KEY.to_string()))
+        .and(warp::fs::dir(env_fetch!("CDN_DIR")))
+        .with(warp::compression::gzip());
+
     // unfortunate conversions has to be done here, might be worth fixing in the future
-    warp::serve(routes.or(music)).run(([127, 0, 0, 1], env_num_or_default!("PORT", DEFAULT_PORT as u32) as u16)).await;
+    warp::serve(routes.or(music).or(cdn))
+        .run((
+            [127, 0, 0, 1],
+            env_num_or_default!("PORT", DEFAULT_PORT as u32) as u16,
+        ))
+        .await;
 
     Ok(())
 }
@@ -381,7 +399,14 @@ fn check_env_args() -> anyhow::Result<()> {
 
     info!("Database: {uri}");
 
-    let vars = ["MAX_CONNECTIONS", "MAX_TIMEOUT", "MAX_CACHE_SIZE_MB", "QUEUE_COOLDOWN", "PORT", "ADMIN_KEY"];
+    let vars = [
+        "MAX_CONNECTIONS",
+        "MAX_TIMEOUT",
+        "MAX_CACHE_SIZE_MB",
+        "QUEUE_COOLDOWN",
+        "PORT",
+        "ADMIN_KEY",
+    ];
     vars.iter().for_each(|x| check_or_warn_env!(x));
     Ok(())
 }

@@ -2,6 +2,7 @@ PORT = 6000
 DBNAME = seanify_db
 
 psql:
+	cd ../seanify && createdb --port=$(PORT) $(DBNAME)
 	cd ../seanify && psql --port=$(PORT) -d $(DBNAME)
 
 prepare:
@@ -23,9 +24,6 @@ startpsql:
 
 stoppsql:
 	cd ../seanify && pg_ctl -D $(DBNAME) stop
-
-mkdatabase:
-	cd ../seanify && createdb --port=$(PORT) $(DBNAME)
 
 install:
 	cargo build --release

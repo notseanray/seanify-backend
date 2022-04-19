@@ -1,4 +1,5 @@
-use crate::{AuthData, aquire_db, DB, UserData};
+use crate::UserData;
+use anyhow::anyhow;
 use log::{error, info, LevelFilter};
 use seahash::hash;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
@@ -26,12 +27,18 @@ struct UserAuth {
 // A struct must be used for query_as! macro (from what I can tell), so to read if the user exists
 // from the database output we must have a struct
 struct Exists {
-    pub exists: Option<bool>
+    pub exists: Option<bool>,
 }
 
-#[derive(sqlx::FromRow)]
-struct Wrapper {
-    pub result: Option<AuthData>
+macro_rules! time {
+    () => {
+        BigD::from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        )
+    };
 }
 
 // Hash the username and password then return, update the last login time
@@ -42,19 +49,17 @@ impl UserAuth {
             username: Some(name.into()),
             username_u64: name,
             password: Some(hash(password.as_bytes()).into()),
-            last_login: Some(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .into(),
-            ),
+            last_login: Some(time!()),
         }
     }
 }
 
 pub(crate) struct Database {
-    pub database: Pool<Postgres>
+    pub database: Pool<Postgres>,
+}
+
+struct SongLookupResult {
+    id: BigD,
 }
 
 macro_rules! to_big_d {
@@ -78,8 +83,7 @@ macro_rules! env_num_or_default {
                 error!(
                     "{} is invalid due to: {e}, \
 using default of {}",
-                $val,
-                $default
+                    $val, $default
                 );
                 $default
             }
@@ -91,7 +95,7 @@ impl Database {
     pub async fn new() -> anyhow::Result<Self> {
         let uri = String::from(var("DATABASE_URL").unwrap());
         Ok(Self {
-            database: Self::try_connect(&uri).await
+            database: Self::try_connect(&uri).await,
         })
     }
 
@@ -151,11 +155,6 @@ impl Database {
     }
 
     pub async fn new_user(&self, username: &str, password: &str) -> anyhow::Result<()> {
-        if let Ok((true, _)) = self.check_if_user_exists_in_auth(username, password).await {
-            // TODO ERROR CODES
-            // already exists in table
-            return Ok(());
-        }
         let user = UserAuth::new(username, password);
         sqlx::query!(
             "
@@ -165,6 +164,186 @@ VALUES($1, $2, $3);
             user.username,
             user.password,
             user.last_login
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        let data = UserData::default();
+        sqlx::query!(
+            "
+UPDATE auth SET
+userdata.public_profile = $1, 
+userdata.display_name = $2, 
+userdata.share_status = $3, 
+userdata.now_playing = $4, 
+userdata.public_status = $5, 
+userdata.recent_plays = $6, 
+userdata.followers = $7, 
+userdata.following = $8
+WHERE username = $9;
+            ",
+            data.public_profile,
+            data.display_name,
+            data.share_status,
+            data.now_playing,
+            data.public_status,
+            &data.recent_plays.unwrap_or_default()[..], // FUCK POSTGRES
+            &data.followers.unwrap_or_default()[..],
+            &data.following.unwrap_or_default()[..],
+            user.username
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn find_song_from_details(
+        &self,
+        song_name: &str,
+        song_author: &str,
+        song_release: &str,
+    ) -> anyhow::Result<BigD> {
+        let result = sqlx::query_as!(
+            SongLookupResult,
+            "
+SELECT id FROM songs
+WHERE title = $1 AND creator = $2 AND upload_date = $3;
+            ",
+            song_name,
+            song_author, // refactor? this is misleading as it's the yt uploader NOT the artist/author of song
+            song_release
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        if let Some(v) = result {
+            return Ok(v.id);
+        }
+        Err(anyhow!("no song exists"))
+    }
+
+    pub async fn remove_song(
+        &self,
+        username: u64,
+        playlist_name: &str,
+        song_name: &str,
+        song_author: &str,
+        song_release: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+DELETE FROM playlistdata
+WHERE username = $1 AND playlist_name = $2 AND song_hash = $3;
+            ",
+            BigD::from(username),
+            playlist_name, // check if valid playlist
+            self.find_song_from_details(song_name, song_author, song_release)
+                .await
+                .unwrap()
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        self.update_playlist_timestamp(username, playlist_name)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn append_song(
+        &self,
+        username: u64,
+        playlist_name: &str,
+        song_name: &str,
+        song_author: &str,
+        song_release: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+INSERT INTO playlistdata(
+    username,
+    playlist_name,
+    song_hash,
+    song_name,
+    date_added
+)
+VALUES($1, $2, $3, $4, $5);
+            ",
+            BigD::from(username),
+            playlist_name, // check if valid playlist
+            BigD::from(
+                self.find_song_from_details(song_name, song_author, song_release)
+                    .await
+                    .unwrap()
+            ),
+            song_name,
+            time!()
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        self.update_playlist_timestamp(username, playlist_name)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_playlist_timestamp(
+        &self,
+        username: u64,
+        play_list_name: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+UPDATE playlist SET last_update = $1
+WHERE username = $2 AND name = $3
+                ",
+            time!(),
+            BigD::from(username),
+            play_list_name
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn create_playlist(
+        &self,
+        username: u64,
+        name: &str,
+        description: Option<&str>,
+        image: Option<&str>,
+        public_playlist: bool,
+    ) -> anyhow::Result<()> {
+        let timestamp = time!();
+        sqlx::query!(
+            "
+INSERT INTO playlist(username, name, creation_timestamp, description, image, public_playlist, last_update)
+VALUES($1, $2, $3, $4, $5, $6, $7);
+            ",
+            BigD::from(username),
+            name,
+            timestamp,
+            description,
+            image,
+            public_playlist,
+            timestamp
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_playlist(&self, username: u64, playlist_name: &str) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+DELETE FROM playlistdata
+WHERE username = $1 AND playlist_name = $2;
+            ",
+            BigD::from(username),
+            playlist_name // check if valid playlist
         )
         .fetch_optional(&mut self.database.acquire().await?)
         .await?;
@@ -192,65 +371,49 @@ SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 LIMIT 1);
         })
     }
 
-    pub async fn is_admin(
-        &self,
-        username: u64
-        ) -> anyhow::Result<bool> {
+    pub async fn is_admin(&self, username: u64) -> anyhow::Result<bool> {
         let result = sqlx::query_as!(
             Exists,
             "
 SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);
             ",
             BigD::from(username)
-            ).fetch_optional(&mut self.database.acquire().await?)
-            .await?;
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
 
         Ok(match result {
             Some(v) => match v.exists {
                 Some(v) => v,
-                None => false
+                None => false,
             },
-            None => false
+            None => false,
         })
     }
 
-    /*
-    pub async fn get_user_data(
-        &self,
-        userhash: u64
-    ) -> anyhow::Result<()> {
-        let data = sqlx::query_as!(
-            AuthData,
+    pub async fn get_user_data(&self, userhash: u64) -> anyhow::Result<Option<UserData>> {
+        Ok(sqlx::query_as!(
+            UserData,
             r#"
-SELECT username, password, admin, last_login, userdata as "userdata: UserData"
-FROM auth
-WHERE username = $1
+SELECT (userdata).* FROM auth WHERE username = $1
             "#,
             BigD::from(userhash)
-            )
-            .fetch_optional(&mut self.database.acquire().await?)
-            .await?;
-        Ok(())
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?)
     }
-    */
 
-    pub async fn update_login_timestamp(
-        &self,
-        userhash: u64
-    ) -> anyhow::Result<()> {
+    pub async fn update_login_timestamp(&self, userhash: u64) -> anyhow::Result<()> {
         sqlx::query!(
-                "
+            "
 UPDATE auth SET last_login = $2 
 WHERE username = $1
                 ",
-                BigD::from(userhash),
-                BigD::from(SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                )
-            ).fetch_optional(&mut self.database.acquire().await?)
-            .await?;
+            BigD::from(userhash),
+            time!()
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
         Ok(())
     }
 

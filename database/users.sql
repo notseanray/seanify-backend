@@ -1,16 +1,20 @@
-CREATE TYPE Song AS (
-	song_hash NUMERIC,
-	date_added NUMERIC,
+CREATE TABLE IF NOT EXISTS PlaylistData (
+	username NUMERIC NOT NULL,
+	playlist_name TEXT NOT NULL,
+	song_hash NUMERIC NOT NULL,
+	song_name TEXT NOT NULL,
+	date_added NUMERIC NOT NULL,
 	custom_name TEXT
 );
 
-CREATE TYPE Playlist AS (
-	name TEXT,
+CREATE TABLE IF NOT EXISTS Playlist (
+	username NUMERIC NOT NULL,
+	name TEXT NOT NULL,
+	creation_timestamp NUMERIC NOT NULL,
 	description TEXT,
 	image TEXT,
-	public_playlist BOOL,
-	last_update NUMERIC,
-	playlist_songs Song[]
+	public_playlist BOOL NOT NULL,
+	last_update NUMERIC NOT NULL
 );
 
 CREATE TYPE UserData AS (
@@ -23,3 +27,5 @@ CREATE TYPE UserData AS (
 	followers TEXT[],
 	following TEXT[]
 );
+
+-- SELECT (userdata).test, (userdata).display FROM auth WHERE username = $1

@@ -1,9 +1,9 @@
-use crate::{CACHE_DIR, DB};
+use crate::{CACHE_DIR, DB, env_num_or_default};
 use core::fmt;
-use log::{info, warn};
+use log::{info, error};
 use seahash::hash;
 use std::{collections::VecDeque, path::PathBuf};
-use tokio::{process::Command, fs::create_dir_all};
+use tokio::{fs::create_dir_all, process::Command};
 
 use youtube_dl::{YoutubeDl, YoutubeDlOutput};
 
@@ -20,7 +20,7 @@ pub(crate) struct Song {
     pub artist: Option<String>,
     pub creator: Option<String>,
     pub filesize: Option<i64>,
-    pub downloaded: bool
+    pub downloaded: bool,
 }
 
 pub enum SongError {
@@ -37,7 +37,6 @@ impl fmt::Display for SongError {
     }
 }
 
-
 impl Song {
     pub fn new(url: &str) -> anyhow::Result<Self, SongError> {
         let output = match YoutubeDl::new(url)
@@ -51,17 +50,24 @@ impl Song {
             .extra_arg("mp3")
             .extra_arg("--embed-thumbnail")
             .run()
-            {
-                Ok(v) => v,
-                Err(_) => return Err(SongError::UnableToDownload)
-            };
+        {
+            Ok(v) => v,
+            Err(_) => return Err(SongError::UnableToDownload),
+        };
 
         match output {
             YoutubeDlOutput::SingleVideo(v) => {
+                let hash_id = format!(
+                    "{} {} {}",
+                    v.title,
+                    v.uploader.clone().unwrap_or_default(),
+                    v.upload_date.clone().unwrap_or_default()
+                );
+
                 Ok(Self {
                     // TODO PROPER ERR HANDLING HERE
-                    // TODO HASH ARTIST + TITLE + DATE
-                    id: Some(hash(v.title.as_bytes())),
+                    // TITLE UPLOADER DATE
+                    id: Some(hash(hash_id.as_bytes())),
                     title: Some(v.title),
                     upload_date: v.upload_date,
                     uploader: v.uploader,
@@ -73,7 +79,7 @@ impl Song {
                     artist: v.artist,
                     creator: v.creator,
                     filesize: v.filesize,
-                    downloaded: false
+                    downloaded: false,
                 })
             }
             _ => Err(SongError::NotSingleVideo),
@@ -94,16 +100,18 @@ pub enum SongManagerError {
     MaxFileSizeLimit,
     QueueLimit,
     InvalidSong,
-    MaxCacheSizeLimit
+    FailedToDownload,
+    MaxCacheSizeLimit,
 }
 
 impl fmt::Display for SongManagerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RateLimitYtdlCall=> write!(f, "Expected single video link! not playlist"),
+            Self::RateLimitYtdlCall => write!(f, "Expected single video link! not playlist"),
             Self::RateLimitBandwidthMB => write!(f, "Unable to download due to network error"),
             Self::MaxFileSizeLimit => write!(f, "Max file size limit reached"),
             Self::QueueLimit => write!(f, "Queue limit reached"),
+            Self::FailedToDownload => write!(f, "Failed to download song from url"),
             Self::InvalidSong => write!(f, "Provided with invalid song"),
             Self::MaxCacheSizeLimit => write!(f, "Max Cache Limit Reached"),
         }
@@ -124,8 +132,11 @@ impl SongManager {
         }
     }
 
+    // cock
     pub fn request(&mut self, url: String) {
-        self.download_queue.push_back(url);
+        if self.download_queue.len() < env_num_or_default!("QUEUE_LIMIT", 50) as usize {
+            self.download_queue.push_back(url);
+        }
     }
 
     pub fn _clear_queue(&mut self) {
@@ -142,7 +153,7 @@ impl SongManager {
 
         if let Some(v) = self.hourly_ytdl_call_max.1 {
             if self.hourly_ytdl_call_max.0 >= v {
-                return Err(SongManagerError::RateLimitYtdlCall); 
+                return Err(SongManagerError::RateLimitYtdlCall);
             }
         }
 
@@ -152,14 +163,13 @@ impl SongManager {
                 Err(_) => return Err(SongManagerError::InvalidSong),
             };
             if song.title.is_none() || song.title.clone().unwrap_or_default().len() < 1 {
-                return Ok(());
+                return Err(SongManagerError::InvalidSong);
             }
             self.hourly_ytdl_call_max.0 += 1;
             if let Some(config_max) = self.max_file_size_mb {
                 if let Some(video_size) = song.filesize {
                     if config_max * 1024 < video_size as u64 {
-                        warn!("song surpassed max set file size!");
-                        return Ok(());
+                        return Err(SongManagerError::MaxFileSizeLimit);
                     }
                 }
             }
@@ -187,7 +197,7 @@ impl SongManager {
                     // FIX
                     DB.get().await.insert_song(song).await.unwrap();
                 }
-                Err(_) => return Ok(()),
+                Err(_) => return Err(SongManagerError::FailedToDownload),
             };
         }
         Ok(())
