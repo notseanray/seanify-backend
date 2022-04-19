@@ -20,7 +20,7 @@ pub(crate) struct Song {
     pub artist: Option<String>,
     pub creator: Option<String>,
     pub filesize: Option<i64>,
-    pub downloaded: bool,
+    pub downloaded: bool
 }
 
 pub enum SongError {
@@ -37,24 +37,6 @@ impl fmt::Display for SongError {
     }
 }
 
-/*
-macro_rules! shorten_input {
-    ($val:expr, $len:expr) => {
-        match $val {
-            Some(v) => Some(match v.len() > $len {
-                true => {
-                    let mut new_input = String::with_capacity($len);
-                    let shortened = &v.chars().collect::<Vec<char>>()[..$len];
-                    shortened.iter().for_each(|x| new_input.push(*x));
-                    new_input
-                }
-                false => v,
-            }),
-            None => None,
-        }
-    };
-}
-*/
 
 impl Song {
     pub fn new(url: &str) -> anyhow::Result<Self, SongError> {
@@ -91,7 +73,7 @@ impl Song {
                     artist: v.artist,
                     creator: v.creator,
                     filesize: v.filesize,
-                    downloaded: false,
+                    downloaded: false
                 })
             }
             _ => Err(SongError::NotSingleVideo),

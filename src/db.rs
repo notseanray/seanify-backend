@@ -12,23 +12,27 @@ use crate::songs::Song;
 const DEFAULT_MAX_CONNECTIONS: u32 = 3;
 const DEFAULT_MAX_TIMEOUT: u32 = 2;
 
-type BigD = sqlx::types::BigDecimal;
+pub(crate) type BigD = sqlx::types::BigDecimal;
 
-struct User {
+// Only used for authentication and signup
+struct UserAuth {
     pub username: Option<BigD>,
     pub username_u64: u64,
     pub password: Option<BigD>,
     pub last_login: Option<BigD>,
 }
 
+// A struct must be used for query_as! macro (from what I can tell), so to read if the user exists
+// from the database output we must have a struct
 struct Exists {
-    pub exists: Option<bool>,
+    pub exists: Option<bool>
 }
 
-impl User {
+// Hash the username and password then return, update the last login time
+impl UserAuth {
     pub fn new(username: &str, password: &str) -> Self {
         let name = hash(username.as_bytes());
-        User {
+        Self {
             username: Some(name.into()),
             username_u64: name,
             password: Some(hash(password.as_bytes()).into()),
@@ -44,9 +48,7 @@ impl User {
 }
 
 pub(crate) struct Database {
-    pub database: Pool<Postgres>,
-    pub uri: String,
-    pub connections: usize,
+    pub database: Pool<Postgres>
 }
 
 macro_rules! to_big_d {
@@ -58,9 +60,10 @@ macro_rules! to_big_d {
     };
 }
 
+#[macro_export]
 macro_rules! env_num_or_default {
     ($val:expr, $default:expr) => {
-        match var($val)
+        match std::env::var($val)
             .unwrap_or(String::from(""))
             .parse::<u32>()
         {
@@ -82,9 +85,7 @@ impl Database {
     pub async fn new() -> anyhow::Result<Self> {
         let uri = String::from(var("DATABASE_URL").unwrap());
         Ok(Self {
-            database: Self::try_connect(&uri).await,
-            uri,
-            connections: 0,
+            database: Self::try_connect(&uri).await
         })
     }
 
@@ -149,7 +150,7 @@ impl Database {
             // already exists in table
             return Ok(());
         }
-        let user = User::new(username, password);
+        let user = UserAuth::new(username, password);
         sqlx::query!(
             "
 INSERT INTO auth(username, password, last_login)
@@ -185,12 +186,54 @@ SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 LIMIT 1);
         })
     }
 
+    pub async fn is_admin(
+        &self,
+        username: u64
+        ) -> anyhow::Result<bool> {
+        let result = sqlx::query_as!(
+            Exists,
+            "
+SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);
+            ",
+            BigD::from(username)
+            ).fetch_optional(&mut self.database.acquire().await?)
+            .await?;
+
+        Ok(match result {
+            Some(v) => match v.exists {
+                Some(v) => v,
+                None => false
+            },
+            None => false
+        })
+    }
+
+    pub async fn update_login_timestamp(
+        &self,
+        userhash: u64
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+                "
+UPDATE auth SET last_login = $2 
+WHERE username = $1
+                ",
+                BigD::from(userhash),
+                BigD::from(SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                )
+            ).fetch_optional(&mut self.database.acquire().await?)
+            .await?;
+        Ok(())
+    }
+
     pub async fn check_if_user_exists_in_auth(
         &self,
         username: &str,
         password: &str,
     ) -> anyhow::Result<(bool, Option<u64>)> {
-        let user = User::new(username, password);
+        let user = UserAuth::new(username, password);
         let output = sqlx::query_as!(
             Exists,
             "

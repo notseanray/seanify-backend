@@ -1,13 +1,13 @@
-SU = sudo
 PORT = 6000 
+DBNAME = seanify_db
 
 psql:
-	cd ../seanify && psql --port=$(PORT) -d db_data
+	cd ../seanify && psql --port=$(PORT) -d $(DBNAME)
 
 prepare:
-	-mkdir -p ../seanify/db_data
-	-cd ../seanify && initdb -D db_data
-	-cd ../seanify && createdb --port=6000 db_data
+	-mkdir -p ../seanify/$(DBNAME)
+	-cd ../seanify && initdb -D $(DBNAME)
+	-cd ../seanify && createdb --port=6000 $(DBNAME)
 	cp .env ../seanify
 
 clean:
@@ -15,18 +15,21 @@ clean:
 
 database:
 	-prepare
-	cd ../seanify && pg_ctl -D db_data -l logfile start
+	cd ../seanify && pg_ctl -D $(DBNAME) -l logfile start
 
 startpsql:
 	-make prepare
-	cd ../seanify && postgres -D db_data --port=$(PORT)
+	cd ../seanify && postgres -D $(DBNAME) --port=$(PORT) 2>&1 &
 
 stoppsql:
-	cd ../seanify && pg_ctl -D db_data stop
+	cd ../seanify && pg_ctl -D $(DBNAME) stop
 
 mkdatabase:
-	cd ../seanify && createdb --port=$(PORT) db_data
+	cd ../seanify && createdb --port=$(PORT) $(DBNAME)
 
 install:
 	cargo build --release
 	cp target/release/seanify ../seanify/
+
+run:
+	RUST_LOG=trace cargo run

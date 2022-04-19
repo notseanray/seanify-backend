@@ -1473,6 +1473,8 @@ dependencies = [
  "log",
  "pretty_env_logger",
  "seahash",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tokio-stream",
