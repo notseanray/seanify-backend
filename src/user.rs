@@ -1,7 +1,5 @@
 use crate::BigD;
-use serde_json::Result;
-use sqlx::database::HasValueRef;
-use sqlx::{Database, Decode};
+use serde::Serialize;
 
 // To insert into postgres they must be of all optional type which is slightly inconvient
 
@@ -30,7 +28,7 @@ pub(crate) struct Playlist {
     pub last_update: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize)]
 pub(crate) struct UserData {
     pub public_profile: Option<bool>,
     pub display_name: Option<String>, //limit to 30 char
@@ -59,18 +57,17 @@ macro_rules! truncate {
     };
 }
 
-/*
 impl UserData {
     pub(crate) fn new() -> Self {
         Self {
-            public: Some(false),
-            playlist: None,
+            public_profile: Some(false),
             display_name: None,
             share_status: Some(false),
             now_playing: None,
+            public_status: None,
             recent_plays: Some(Vec::new()),
             followers: Some(Vec::new()),
             following: Some(Vec::new())
         }
     }
-}*/
+}

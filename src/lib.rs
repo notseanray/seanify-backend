@@ -2,6 +2,7 @@ mod db;
 use db::*;
 
 mod songs;
+use serde_json::json;
 use songs::*;
 
 mod user;
@@ -9,14 +10,17 @@ use user::*;
 
 use async_once::AsyncOnce;
 use dotenv;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::{FutureExt, StreamExt, lock};
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
+use warp::log::Info;
+use std::collections::{VecDeque, BTreeMap};
 use std::convert::Infallible;
 use std::env;
+use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 use warp::{
@@ -40,18 +44,38 @@ macro_rules! env_fetch {
     };
 }
 
+
 lazy_static! {
     // TODO better error handling here
     static ref DB: AsyncOnce<Database> = AsyncOnce::new(async { Database::new().await.unwrap() });
-    static ref SONG_MANAGER: Mutex<SongManager> = Mutex::new(SongManager::new(None, None, None));
+    static ref SONG_MANAGER: RwLock<SongManager> = RwLock::new(SongManager::new(None, None, None));
     static ref INSTANCE_KEY: String = env_fetch!("INSTANCE_KEY");
     static ref ADMIN_KEY: String = env::var("ADMIN_KEY").unwrap_or_default();
     pub static ref CACHE_DIR: String = env_fetch!("CACHE_DIR");
+
+    // create list of ips that are blocked
+    static ref BLOCKED_LIST: Arc<std::sync::RwLock<BlockedList>> = Arc::new(std::sync::RwLock::new(BlockedList::default())); 
+
+    // create the ratelimiter with the blocked list inside it, this is done seperately to allow
+    // only loading the blocked list and not the current list as well
+    static ref RATE_LIMIT: Arc<std::sync::Mutex<RateLimiter<'static>>> = Arc::new(std::sync::Mutex::new(RateLimiter::new(&BLOCKED_LIST)));
+
+    // max request allowed per a second per an address
+    static ref MAX_RATELIMIT: usize = env_num_or_default!("IP_MAX_COUNT", 50) as usize;
 }
 
 const DEFAULT_PORT: u16 = 8080;
+
 // time in seconds between downloading from queue
 const DEFAULT_QUEUE_COOLDOWN: u32 = 10;
+
+// a list of all the client's ips that connected are stored, this is the max length for that before
+// the list does not get appended to
+const MAX_CLIENT_IP_CACHE: usize = 200;
+
+const IP_BAN_IN_SECONDS: usize = 60;
+
+const IP_BLACKLIST_CYCLE_MS: u32 = 10000;
 
 /*
  * These are predefined commands that are valid to send client to client
@@ -190,11 +214,7 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
                 };
                 return;
             }
-            if let Some(response) = handle_response(msg, &v, &clients, &client_id).await {
-                if let Some(sender) = &v.sender {
-                    let _ = sender.send(Ok(Message::text(response)));
-                }
-            }
+            handle_response(msg, &v, &clients, &client_id).await;
         }
         None => {}
     }
@@ -273,32 +293,41 @@ async fn handle_response<'a>(
     ws_client: &WsClient,
     clients: &Clients,
     client_uuid: &str,
-) -> Option<&'a str> {
+) {
     debug!("{msg}");
     if let Some(v) = msg.find(" ") {
         let command = &msg[..v];
         let message = &msg[v..].trim_start();
         if CLIENT_COMMANDS.contains(&command) {
             send_to_clients!(clients, ws_client, msg);
-            return None;
+            return;
         }
-        return match command {
-            "PING" => Some("PONG"),
+        let response = match command {
+            "PING" => Some(String::from("PONG")),
             "QUEUE" => {
                 // Send new song to download queue
-                let mut locked = SONG_MANAGER.lock().await;
+                let mut locked = SONG_MANAGER.write().await;
                 locked.request(message.to_string());
                 None
             }
             "SEARCH" => {
                 unimplemented!();
             }
-            "REQUEST_DATA" => None,
+            "REQUEST_USER_DATA" => {
+                match aquire_db!(DB).get_user_data(ws_client.username_hash).await {
+                    Ok(v) => {
+                        let data = json!(&v).to_string();
+                        info!("Sending userdata: {data}");
+                        Some(data)
+                    }
+                    Err(_) => None
+                }
+            },
             "CLOSE" => {
                 let mut locked = clients.lock().await;
                 let client = match locked.get(client_uuid) {
                     Some(v) => v,
-                    None => return None,
+                    None => return,
                 };
                 // Close the connection to the websocket
                 if let Some(sender) = &client.sender {
@@ -310,8 +339,12 @@ async fn handle_response<'a>(
             }
             _ => None,
         };
+        if let Some(data_out) = response {
+            if let Some(v) = &ws_client.sender {
+                let _ = v.send(Ok(Message::text(data_out)));
+            }
+        }
     }
-    None
 }
 
 fn with_clients(clients: Clients) -> impl Filter<Extract = (Clients,), Error = Infallible> + Clone {
@@ -334,6 +367,8 @@ fn with_clients(clients: Clients) -> impl Filter<Extract = (Clients,), Error = I
  * For example, if a song has a hash of 12 and my instance key is songs then it can be downloaded
  * from 127.0.0.1:3030/songs/12
  */
+
+//TODO add arg handling
 pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
     pretty_env_logger::init();
     check_env_args().unwrap();
@@ -346,17 +381,59 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
                 env_num_or_default!("QUEUE_COOLDOWN", DEFAULT_QUEUE_COOLDOWN).into(),
             ))
             .await;
-            let mut locked = SONG_MANAGER.lock().await;
+            let mut locked = SONG_MANAGER.write().await;
             let _ = locked.cycle_queue().await;
+        }
+    });
+
+
+    tokio::spawn(async move {
+        // ip blacklist cycle
+        loop {
+            tokio::time::sleep(Duration::from_millis(
+                    env_num_or_default!("IP_BLACKLIST_CYCLE_MS", IP_BLACKLIST_CYCLE_MS) as u64,
+            ))
+            .await;
+            let mut locked = RATE_LIMIT.lock().unwrap();
+            info!("cycled");
+            locked.cycle();
+        }
+    });
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let mut locked = BLOCKED_LIST.write().unwrap();
+            for (_, v) in locked.list.iter_mut() {
+                *v -= 1;
+            }
+            locked.list.retain(|_, v| { v > &mut 0 });
         }
     });
 
     let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
 
+    let log = warp::reject::custom(|info: Info| {
+        info!("remote connected");
+        if let Some(v) = info.remote_addr() {
+            info!("remote address: {:#?} connected", v);
+            println!("{:?}", BLOCKED_LIST.read().unwrap().list);
+            println!("{:?}", RATE_LIMIT.lock().unwrap().ip_list);
+            if BLOCKED_LIST.read().unwrap().list.contains_key(&v.ip()) {
+                info!("stopped {:#?} from connecting", v);
+                return;
+            }
+            info!("added {:#?} to rate limit queue", v);
+            let mut locked = RATE_LIMIT.lock().unwrap();
+            locked.add(v);
+        }
+    });
+
     let ws_route = warp::path("seanify")
         .and(warp::ws())
         .and(with_clients(clients.clone()))
-        .and_then(ws_handler);
+        .and_then(ws_handler)
+        .with(log);
 
     let routes = ws_route.with(warp::cors().allow_any_origin());
 
@@ -377,6 +454,70 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
         .await;
 
     Ok(())
+}
+
+// Keep list of blocked ips, we store them seperately so it's quicker to access since we don't need
+// to load the total list of ips
+#[derive(Default)]
+struct BlockedList {
+    list: BTreeMap<IpAddr, usize> 
+}
+
+/*
+ * Keep a list of ips that have connected and cycle through them every set amount of ms, if there
+ * are too many instances of the same ip in the list at the same time we add them to the blocked
+ * list
+ *
+ * Since the blockedlist needs to be read everytime there is a new connection we only store a
+ * reference to it in this struct so we can avoid locking both the ratelimiter and blockedlist at
+ * the same time
+ *
+ * Since the blocked list is going to be read a lot more often we keep it in an RwLock instead of a
+ * mutex
+ */
+struct RateLimiter<'a> {
+    ip_list: VecDeque<IpAddr>,
+    blocked_list: &'a Arc<std::sync::RwLock<BlockedList>>
+}
+
+impl <'a>RateLimiter<'a> {
+    pub fn new(blocked_list: &'a Arc<std::sync::RwLock<BlockedList>>) -> Self {
+        Self { 
+            ip_list: VecDeque::with_capacity(1),
+            blocked_list
+        }
+    }
+
+    pub fn add(&mut self, ip: SocketAddr) {
+        if self.ip_list.len() < MAX_CLIENT_IP_CACHE {
+            self.ip_list.push_back(ip.ip());
+        }
+    } 
+
+    pub fn cycle(&mut self) {
+        let _ = self.ip_list.pop_front();
+        self.check_if_limited();
+    }
+
+    fn check_if_limited(&mut self) {
+        // TODO
+        // only check the actual ip not the port too
+        let mut ips = BTreeMap::new();
+        for ip in self.ip_list.iter() {
+            let count = ips.entry(ip).or_insert(0);
+            *count += 1;
+        }
+        for ip in ips.iter() {
+            if let Some(v) = ips.get(ip.0) {
+                if v > &*MAX_RATELIMIT {
+                    let mut locked = self.blocked_list.write().unwrap();
+                    // "**" lmao wtf
+                    locked.list.insert(**ip.0, IP_BAN_IN_SECONDS);
+                }
+
+            }
+        }
+    }
 }
 
 macro_rules! check_or_warn_env {
@@ -406,7 +547,11 @@ fn check_env_args() -> anyhow::Result<()> {
         "QUEUE_COOLDOWN",
         "PORT",
         "ADMIN_KEY",
+        "IP_BAN_IN_SECONDS",
+        "IP_MAX_COUNT",
+        "IP_BLACKLIST_CYCLE_MS"
     ];
+
     vars.iter().for_each(|x| check_or_warn_env!(x));
     Ok(())
 }

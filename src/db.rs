@@ -158,8 +158,8 @@ impl Database {
         let user = UserAuth::new(username, password);
         sqlx::query!(
             "
-INSERT INTO auth(username, password, last_login)
-VALUES($1, $2, $3);
+INSERT INTO auth(username, password, admin, last_login)
+VALUES($1, $2, false, $3);
             ",
             user.username,
             user.password,

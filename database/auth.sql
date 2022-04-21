@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS auth (
 	password NUMERIC NOT NULL,
 	admin BOOL NOT NULL,
 	last_login NUMERIC,
-	userdata UserData NOT NULL
+	userdata UserData
 );
 
 CREATE TABLE IF NOT EXISTS auth (
