@@ -10,7 +10,7 @@ use user::*;
 
 use async_once::AsyncOnce;
 use dotenv;
-use futures_util::{FutureExt, StreamExt, lock};
+use futures_util::{FutureExt, StreamExt};
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
 use warp::log::Info;
@@ -107,7 +107,7 @@ pub(crate) struct WsClient {
 
 // We store the websocket clients in this hashmap, the string being a uuid
 pub(crate) type Clients = Arc<Mutex<HashMap<String, WsClient>>>;
-pub type Result<T> = std::result::Result<T, Rejection>;
+type Result<T> = std::result::Result<T, Rejection>;
 
 async fn ws_handler(ws: warp::ws::Ws, clients: Clients) -> Result<impl Reply> {
     Ok(ws.on_upgrade(move |socket| client_connection(socket, clients)))
@@ -283,6 +283,12 @@ macro_rules! send_to_clients {
     };
 }
 
+// TODO api calls 
+// follow 
+// unfollow
+// update userdata - need to check for display name updates to update followers list for other
+// people if needed
+
 /*
  * Respond to messages sent from a client, if one of the prestored "client commands" is executed
  * then we can just echo the message, this *should* be secure since you can only send to usernames
@@ -302,6 +308,7 @@ async fn handle_response<'a>(
             send_to_clients!(clients, ws_client, msg);
             return;
         }
+        let args: Vec<&str> = message.split(" ").collect();
         let response = match command {
             "PING" => Some(String::from("PONG")),
             "QUEUE" => {
@@ -309,10 +316,128 @@ async fn handle_response<'a>(
                 let mut locked = SONG_MANAGER.write().await;
                 locked.request(message.to_string());
                 None
-            }
-            "SEARCH" => {
-                unimplemented!();
-            }
+            },
+            "QUEUE_LIST" => {
+                let locked = SONG_MANAGER.read().await;
+                Some(locked.list_queue())
+            },
+            "FIND_SONG" => {
+                match args.len() {
+                    3 => {
+                        match aquire_db!(DB).find_song_from_details(args[0], args[1], args[2]).await {
+                            Ok(v) => Some(v.to_string()),
+                            Err(_) => None
+                        }
+                    }, 
+                    _ => None
+                }
+            },
+            "REMOVE_SONG" => {
+                match args.len() {
+                    4 => {
+                        match aquire_db!(DB).remove_song(ws_client.username_hash, args[0], args[1], args[2], args[3]).await {
+                            Ok(_) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("CouldNotBeFound"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "SONG_LIST_SHORT" => {
+                match aquire_db!(DB).get_song_list().await {
+                    Ok(v) => Some(v),
+                    Err(_) => None
+                }
+            },
+            "ADD_SONG" => {
+                match args.len() {
+                    4 => {
+                        match aquire_db!(DB).append_song(ws_client.username_hash, args[0], args[1], args[2], args[3]).await {
+                            Ok(_) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("CouldNotFindSong"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "ADD_SONG_HASH" => {
+                match args.len() {
+                    3 => {
+                        match args[1].parse::<u64>() {
+                            Ok(v) => {
+                                match aquire_db!(DB).append_song_from_hash(ws_client.username_hash, args[0], v).await {
+                                    Ok(()) => Some(String::from("OK")),
+                                    Err(_) => Some(String::from("InvalidHash"))
+                                }
+                            },
+                            Err(_) => Some(String::from("ExpectedHash"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "MAKE_PLAYLIST" => {
+                match args.len() {
+                    2 => {
+                        match aquire_db!(DB).create_playlist(ws_client.username_hash, args[0], args[1]).await {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidHash"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "REMOVE_PLAYLIST" => {
+                match args.len() {
+                    1 => {
+                        // apply delim change here too, create macro or function for it
+                        match aquire_db!(DB).delete_playlist(ws_client.username_hash, args[0]).await {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidHash"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "SET_PLAYLIST_IMAGE" => {
+                match args.len() {
+                    2 => {
+                        match aquire_db!(DB).set_playlist_image(ws_client.username_hash, args[0], args[1]).await {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidHash"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "SET_PLAYLIST_DESCRIPTION" => {
+                match args.len() {
+                    2 => {
+                        // TODO 
+                        // parse with % delim instead of spaces so there can be a name in the
+                        // description
+                        //
+                        // also actually do this for rename playlist and make playlist so there can
+                        // be spaces in the names
+                        match aquire_db!(DB).set_playlist_description(ws_client.username_hash, args[0], args[1]).await {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidDescription"))
+                        }
+                    },
+                    _ => None
+                }
+            },
+            "RENAME_PLAYLIST" => {
+                match args.len() {
+                    2 => {
+                        match aquire_db!(DB).rename_playlist(ws_client.username_hash, args[0], args[1]).await {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidHash"))
+                        }
+                    },
+                    _ => None
+                }
+            },
             "REQUEST_USER_DATA" => {
                 match aquire_db!(DB).get_user_data(ws_client.username_hash).await {
                     Ok(v) => {
@@ -413,7 +538,7 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
 
     let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
 
-    let log = warp::reject::custom(|info: Info| {
+    let log = warp::log::custom(|info: Info| {
         info!("remote connected");
         if let Some(v) = info.remote_addr() {
             info!("remote address: {:#?} connected", v);

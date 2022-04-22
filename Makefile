@@ -1,6 +1,6 @@
-PORT = 6000 
-DBNAME = seanify_db
-SU = doas
+PORT=6000 
+DBNAME=seanify_db
+SU=doas
 
 # TO USE DO make startpsql and make psql
 
@@ -15,15 +15,19 @@ prepare:
 	cd ../seanify && pg_ctl --port=$(PORT) -D $(DBNAME) -l logfile start
 
 clean:
-	-rm ../seanify/seanify
+	-rm -rf ../seanify/$(DBNAME)
 
 db:
-	cd ../seanify && pg_ctl -D $(DBNAME) -l logfile start
+	-mkdir -p ../seanify/$(DBNAME)
+	cp .env ../seanify
+	-cd ../seanify && initdb -D $(DBNAME) --port=$(PORT)
+	cd ../seanify && pg_ctl -o "-F -p $(PORT)" -D $(DBNAME) -l logfile start
+	cd ../seanify && postgres -D $(DBNAME) --port=$(PORT) 2>&1 &
+	cd ../seanify && createdb --port=6000 $(DBNAME)
 
 startpsql:
-	$(SU) mkdir /run/postgresql
-	$(SU) chown -R sean /run/postgresql
-	cd ../seanify && postgres -D $(DBNAME) --port=$(PORT) 2>&1 &
+	-$(SU) mkdir /run/postgresql
+	-$(SU) chown -R sean /run/postgresql
 
 stoppsql:
 	cd ../seanify && pg_ctl -D $(DBNAME) stop

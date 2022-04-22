@@ -2,6 +2,8 @@ use crate::UserData;
 use anyhow::anyhow;
 use log::{error, info, LevelFilter};
 use seahash::hash;
+use serde::Serialize;
+use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
 use sqlx::ConnectOptions;
 use sqlx::Pool;
@@ -60,6 +62,23 @@ pub(crate) struct Database {
 
 struct SongLookupResult {
     id: BigD,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SongTitleResult {
+    pub title: String,
+    pub uploader: Option<String>,
+    pub thumbnail: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub artist: Option<String>,
+    pub creator: Option<String>,
+    pub upload_date: Option<String>
+}
+
+struct SongDetails {
+    id: BigD,
+    title: String
 }
 
 macro_rules! to_big_d {
@@ -198,6 +217,20 @@ WHERE username = $9;
         Ok(())
     }
 
+    pub async fn get_song_list(&self) -> anyhow::Result<String> {
+            let result = sqlx::query_as!(
+                SongTitleResult,
+                "
+SELECT title, uploader, thumbnail, album, album_artist, artist, creator, upload_date FROM songs;
+                "
+                )
+                .fetch_all(&mut self.database.acquire().await?)
+                .await?;
+
+            let result = json!(&result).to_string();
+            Ok(result)
+    }
+
     pub async fn find_song_from_details(
         &self,
         song_name: &str,
@@ -241,6 +274,60 @@ WHERE username = $1 AND playlist_name = $2 AND song_hash = $3;
             self.find_song_from_details(song_name, song_author, song_release)
                 .await
                 .unwrap()
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        self.update_playlist_timestamp(username, playlist_name)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn find_song_from_hash(
+        &self,
+        song_hash: u64
+    ) -> anyhow::Result<SongDetails> {
+        let result = sqlx::query_as!(
+            SongDetails,
+            "
+SELECT id, title FROM songs
+WHERE id = $1;
+            ",
+            BigD::from(song_hash)
+            )
+            .fetch_optional(&mut self.database.acquire().await?)
+            .await?;
+
+        match result {
+            Some(v) => Ok(v),
+            None => Err(anyhow!("Invalid song"))
+        }
+    }
+
+    pub async fn append_song_from_hash(
+        &self,
+        username: u64,
+        playlist_name: &str,
+        song_hash: u64
+    ) -> anyhow::Result<()> {
+        let song = self.find_song_from_hash(song_hash).await?;
+        sqlx::query!(
+            "
+INSERT INTO playlistdata(
+    username,
+    playlist_name,
+    song_hash,
+    song_name,
+    date_added
+)
+VALUES($1, $2, $3, $4, $5);
+            ",
+            BigD::from(username),
+            playlist_name, // check if valid playlist
+            song.id,
+            song.title,
+            time!()
         )
         .fetch_optional(&mut self.database.acquire().await?)
         .await?;
@@ -313,23 +400,71 @@ WHERE username = $2 AND name = $3
         &self,
         username: u64,
         name: &str,
-        description: Option<&str>,
-        image: Option<&str>,
-        public_playlist: bool,
+        public_playlist: &str,
     ) -> anyhow::Result<()> {
+        let public_playlist = match public_playlist.to_lowercase().as_str() {
+            "true" => true,
+            "false" => false,
+            _ => return Err(anyhow!("ExpectedTrueOrFalse"))
+        };
+
         let timestamp = time!();
+
         sqlx::query!(
             "
-INSERT INTO playlist(username, name, creation_timestamp, description, image, public_playlist, last_update)
-VALUES($1, $2, $3, $4, $5, $6, $7);
+INSERT INTO playlist(username, name, creation_timestamp, public_playlist, last_update)
+VALUES($1, $2, $3, $4, $5);
             ",
             BigD::from(username),
             name,
             timestamp,
-            description,
-            image,
             public_playlist,
             timestamp
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_playlist_image(&self, username: u64, name: &str, image: &str) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+UPDATE playlist SET image = $3
+WHERE username = $1 AND name = $2
+            ",
+            BigD::from(username),
+            name,
+            image
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_playlist_description(&self, username: u64, name: &str, description: &str) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+UPDATE playlist SET description = $3
+WHERE username = $1 AND name = $2
+            ",
+            BigD::from(username),
+            name,
+            description
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn rename_playlist(&self, username: u64, name: &str, new_name: &str) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+UPDATE playlist SET name = $3
+WHERE username = $1 AND name = $2
+            ",
+            BigD::from(username),
+            name,
+            new_name
         )
         .fetch_optional(&mut self.database.acquire().await?)
         .await?;

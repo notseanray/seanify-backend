@@ -132,18 +132,29 @@ impl SongManager {
         }
     }
 
-    // cock
-    pub fn request(&mut self, url: String) {
+    pub fn request(&mut self, url: String) -> anyhow::Result<(), SongManagerError> {
         if self.download_queue.len() < env_num_or_default!("QUEUE_LIMIT", 50) as usize {
             self.download_queue.push_back(url);
+            return Ok(());
         }
+        Err(SongManagerError::QueueLimit)
     }
 
+    // ADMIN ONLY
     pub fn _clear_queue(&mut self) {
         self.download_queue.clear();
     }
 
+    pub fn list_queue(&self) -> String {
+        let mut queue = String::new();
+        self.download_queue.iter().for_each(|x| queue.push_str(&format!("{x}")));
+        queue
+    }
+
     pub async fn cycle_queue(&mut self) -> anyhow::Result<(), SongManagerError> {
+        // TODO
+        // check size of cache dir and return error or not from it
+        
         // MOVE THIS
         if let Some(v) = self.hourly_bandwidth_limit_mb.1 {
             if self.hourly_bandwidth_limit_mb.0 > v * 1024 {
