@@ -1,6 +1,6 @@
-use crate::{CACHE_DIR, DB, env_num_or_default};
+use crate::{env_num_or_default, CACHE_DIR, DB};
 use core::fmt;
-use log::{info, error};
+use log::{error, info};
 use seahash::hash;
 use std::{collections::VecDeque, path::PathBuf};
 use tokio::{fs::create_dir_all, process::Command};
@@ -147,14 +147,16 @@ impl SongManager {
 
     pub fn list_queue(&self) -> String {
         let mut queue = String::new();
-        self.download_queue.iter().for_each(|x| queue.push_str(&format!("{x}")));
+        self.download_queue
+            .iter()
+            .for_each(|x| queue.push_str(&format!("{x}")));
         queue
     }
 
     pub async fn cycle_queue(&mut self) -> anyhow::Result<(), SongManagerError> {
         // TODO
         // check size of cache dir and return error or not from it
-        
+
         // MOVE THIS
         if let Some(v) = self.hourly_bandwidth_limit_mb.1 {
             if self.hourly_bandwidth_limit_mb.0 > v * 1024 {

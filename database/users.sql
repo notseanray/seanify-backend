@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS Playlist (
 
 CREATE TYPE UserData AS (
 	public_profile BOOL,
+	profile_picture TEXT,
 	display_name TEXT,
 	share_status BOOL,
 	now_playing TEXT,

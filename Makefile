@@ -21,9 +21,17 @@ db:
 	-mkdir -p ../seanify/$(DBNAME)
 	cp .env ../seanify
 	-cd ../seanify && initdb -D $(DBNAME) --port=$(PORT)
-	cd ../seanify && pg_ctl -o "-F -p $(PORT)" -D $(DBNAME) -l logfile start
-	cd ../seanify && postgres -D $(DBNAME) --port=$(PORT) 2>&1 &
-	cd ../seanify && createdb --port=6000 $(DBNAME)
+	-cd ../seanify && pg_ctl -o "-F -p $(PORT)" -D $(DBNAME) -l logfile start
+	-cd ../seanify && postgres -D $(DBNAME) --port=$(PORT) 2>&1 &
+	-cd ../seanify && createdb --port=6000 $(DBNAME)
+
+preparesqlx:
+	cargo sqlx prepare -- --lib
+
+testrelease:
+	cargo build --release
+	cp target/release/seanify .
+	RUST_LOG=trace ./seanify
 
 startpsql:
 	-$(SU) mkdir /run/postgresql
