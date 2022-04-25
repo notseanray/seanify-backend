@@ -607,7 +607,11 @@ WHERE username = $2 AND name = $3
         Ok(())
     }
 
-    async fn does_playlist_exists(&self, username: u64, name: &str) -> anyhow::Result<bool> {
+    async fn does_playlist_exists(
+        &self, 
+        username: u64, 
+        name: &str
+    ) -> anyhow::Result<bool> {
         let result = sqlx::query_as!(
             Exists,
             "
@@ -638,7 +642,7 @@ SELECT EXISTS(SELECT 1 FROM playlist WHERE username = $1 AND name = $2 LIMIT 1);
         let public_playlist = match public_playlist.to_lowercase().as_str() {
             "true" => true,
             "false" => false,
-            _ => return Err(anyhow!("ExpectedTrueOrFalse")),
+            _ => return Err(anyhow!("InvalidMessage"))
         };
 
         let timestamp = time!();

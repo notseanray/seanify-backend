@@ -249,6 +249,7 @@ async fn client_connection(ws: WebSocket, clients: Clients) {
         username_hash: 0,
     };
     clients.lock().await.insert(mapped_uuid, new_client);
+    info!("s");
     while let Some(result) = rx.next().await {
         let msg = match result {
             Ok(msg) => msg,
@@ -535,6 +536,7 @@ async fn handle_response<'a>(
                         Err(_) => None,
                     }
                 }
+                3.. => Some(String::from("OK")),
                 _ => None,
             },
             "CLOSE" => {
@@ -733,7 +735,7 @@ fn check_env_args() -> anyhow::Result<()> {
         "ADMIN_KEY",
         "RATE_BAN_IN_SECONDS",
         "RATE_MAX_COUNT",
-        "RATE_BLACKLIST_CYCLE_MS",
+        "RATE_BLACKLIST_CYCLE_MS"
     ];
 
     vars.iter().for_each(|x| check_or_warn_env!(x));
