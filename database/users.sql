@@ -19,13 +19,14 @@ CREATE TABLE IF NOT EXISTS Playlist (
 
 CREATE TYPE UserData AS (
 	public_profile BOOL,
+	profile_picture TEXT,
 	display_name TEXT,
 	share_status BOOL,
 	now_playing TEXT,
 	public_status TEXT,
 	recent_plays TEXT[],
-	followers TEXT[],
-	following TEXT[]
+	followers NUMERIC[],
+	following NUMERIC[]
 );
 
 -- SELECT (userdata).test, (userdata).display FROM auth WHERE username = $1

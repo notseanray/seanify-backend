@@ -1,4 +1,6 @@
 /target
 /db-data
 /client_example/node_modules
+/seanify-backend
 logfile
+seanify

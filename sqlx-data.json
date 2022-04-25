@@ -1,0 +1,426 @@
+{
+  "db": "PostgreSQL",
+  "05118fcaac77551d8d233e0eae93cabf1c1c50d3081749c444b387bd26f7bdda": {
+    "describe": {
+      "columns": [
+        {
+          "name": "exists",
+          "ordinal": 0,
+          "type_info": "Bool"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nSELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);\n            "
+  },
+  "2701f8a35db4523ba5a59d3b2d43ed63a1b77481226285dd9e0d7d1b8cb9082c": {
+    "describe": {
+      "columns": [
+        {
+          "name": "public_profile",
+          "ordinal": 0,
+          "type_info": "Bool"
+        },
+        {
+          "name": "profile_picture",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "display_name",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "share_status",
+          "ordinal": 3,
+          "type_info": "Bool"
+        },
+        {
+          "name": "now_playing",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "public_status",
+          "ordinal": 5,
+          "type_info": "Text"
+        },
+        {
+          "name": "recent_plays",
+          "ordinal": 6,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "followers",
+          "ordinal": 7,
+          "type_info": "TextArray"
+        },
+        {
+          "name": "following",
+          "ordinal": 8,
+          "type_info": "TextArray"
+        }
+      ],
+      "nullable": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nSELECT (userdata).* FROM auth WHERE username = $1\n            "
+  },
+  "41cdb52918dece86412310ee9cdb80028e51272e29376eab757ca64abe2a11bd": {
+    "describe": {
+      "columns": [
+        {
+          "name": "title",
+          "ordinal": 0,
+          "type_info": "Text"
+        },
+        {
+          "name": "uploader",
+          "ordinal": 1,
+          "type_info": "Text"
+        },
+        {
+          "name": "thumbnail",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "album",
+          "ordinal": 3,
+          "type_info": "Text"
+        },
+        {
+          "name": "album_artist",
+          "ordinal": 4,
+          "type_info": "Text"
+        },
+        {
+          "name": "artist",
+          "ordinal": 5,
+          "type_info": "Text"
+        },
+        {
+          "name": "creator",
+          "ordinal": 6,
+          "type_info": "Text"
+        },
+        {
+          "name": "upload_date",
+          "ordinal": 7,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "parameters": {
+        "Left": []
+      }
+    },
+    "query": "\nSELECT title, uploader, thumbnail, album, album_artist, artist, creator, upload_date FROM songs;\n                "
+  },
+  "4b69ae5dcb4eea079b5af35d3d3bad1c07b8819170a779688f9fbb677b99d1f1": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Bool",
+          "Text",
+          "Bool",
+          "Text",
+          "Text",
+          "TextArray",
+          "TextArray",
+          "TextArray",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nUPDATE auth SET\nuserdata.public_profile = $1, \nuserdata.display_name = $2, \nuserdata.share_status = $3, \nuserdata.now_playing = $4, \nuserdata.public_status = $5, \nuserdata.recent_plays = $6, \nuserdata.followers = $7, \nuserdata.following = $8\nWHERE username = $9;\n            "
+  },
+  "53469c7283db43c39d53a648a5c10f60025b7414be31f62c28804d379ddbb789": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Numeric",
+          "Bool",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nINSERT INTO playlist(username, name, creation_timestamp, public_playlist, last_update)\nVALUES($1, $2, $3, $4, $5);\n            "
+  },
+  "5525575dbd9c4cbfb4fa14939659113e04aab163f0a3fb3b0a04b8664acf366a": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Numeric"
+        },
+        {
+          "name": "title",
+          "ordinal": 1,
+          "type_info": "Text"
+        }
+      ],
+      "nullable": [
+        false,
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nSELECT id, title FROM songs\nWHERE id = $1;\n            "
+  },
+  "55a75b47031b8709f09479c764eff8963fe2690f27fc03e09d96a78f4fecb960": {
+    "describe": {
+      "columns": [
+        {
+          "name": "exists",
+          "ordinal": 0,
+          "type_info": "Bool"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nSELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND password = $2 LIMIT 1);\n                "
+  },
+  "65eace025a6652f77cc10b75d90e60d7fef31ac4ea26a850e7905be488f7be79": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nUPDATE auth SET last_login = $2 \nWHERE username = $1\n                "
+  },
+  "6f78fa1d30f26f54c51253b59f2ea18eb4c3156d557280ec11a5fc64751fc98c": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "\nUPDATE playlist SET name = $3\nWHERE username = $1 AND name = $2\n            "
+  },
+  "768709bf8dfa676509bf5bdeef14b281a7f999227a17a0a8a58762b5ab78eaef": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nDELETE FROM playlistdata\nWHERE username = $1 AND playlist_name = $2 AND song_hash = $3;\n            "
+  },
+  "914f0b1aa9dd7ba949cbbcb348358175002590a11a85e0337f88efac04c3ae12": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Text",
+          "Int8",
+          "Bool"
+        ]
+      }
+    },
+    "query": "\n INSERT INTO songs(id, title, upload_date, uploader, url, genre,thumbnail, album, album_artist, artist, creator, filesize, downloaded)\n VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);\n             "
+  },
+  "a18b3a31bf0a3f020a17e6b6cbcb443de80666805fdb879ae2d89b7f3409b3e5": {
+    "describe": {
+      "columns": [
+        {
+          "name": "exists",
+          "ordinal": 0,
+          "type_info": "Bool"
+        }
+      ],
+      "nullable": [
+        null
+      ],
+      "parameters": {
+        "Left": [
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nSELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 LIMIT 1);\n            "
+  },
+  "af1bec7f8f3ed772edd4b6a0d113a6130739f1a78b005d8840024a47fa6e0507": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text"
+        ]
+      }
+    },
+    "query": "\nDELETE FROM playlistdata\nWHERE username = $1 AND playlist_name = $2;\n            "
+  },
+  "d2c9fd90d94e861841efc18234d717e5d20e405d6fbf6aa6dd3211e9854f404c": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "\nUPDATE playlist SET image = $3\nWHERE username = $1 AND name = $2\n            "
+  },
+  "e53e31d14ecc808cd9816caf32a700260ea3a81ad5d731f6bfb3220854c97c83": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Numeric",
+          "Text"
+        ]
+      }
+    },
+    "query": "\nUPDATE playlist SET last_update = $1\nWHERE username = $2 AND name = $3\n                "
+  },
+  "ea561c39ea20cd43288ecf10ff00a3e2aa5d223804e3496a202c6dba7de490ee": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Numeric",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nINSERT INTO auth(username, password, admin, last_login)\nVALUES($1, $2, false, $3);\n            "
+  },
+  "f0daacd32d1a4344f8cbd2d1fde6fdddacaceafb5c0ddfe69df1ba9d0df22168": {
+    "describe": {
+      "columns": [
+        {
+          "name": "id",
+          "ordinal": 0,
+          "type_info": "Numeric"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Left": [
+          "Text",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "\nSELECT id FROM songs\nWHERE title = $1 AND creator = $2 AND upload_date = $3;\n            "
+  },
+  "f9242c2854f8d0c9aec2c738aade2611d707f0e4731e40b3a06c5d61a2d75c69": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Numeric",
+          "Text",
+          "Numeric"
+        ]
+      }
+    },
+    "query": "\nINSERT INTO playlistdata(\n    username,\n    playlist_name,\n    song_hash,\n    song_name,\n    date_added\n)\nVALUES($1, $2, $3, $4, $5);\n            "
+  },
+  "fac4d4208deefb717f879ef1caa7aaf54ca8fc68d43c7c61348b33cccc0621ef": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Left": [
+          "Numeric",
+          "Text",
+          "Text"
+        ]
+      }
+    },
+    "query": "\nUPDATE playlist SET description = $3\nWHERE username = $1 AND name = $2\n            "
+  }
+}

@@ -2,22 +2,20 @@ mod db;
 use db::*;
 
 mod songs;
-use serde_json::json;
 use songs::*;
 
 mod user;
 use user::*;
 
+use crate::user::Playlist;
 use async_once::AsyncOnce;
-use dotenv;
 use futures_util::{FutureExt, StreamExt};
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
-use warp::log::Info;
-use std::collections::{VecDeque, BTreeMap};
+use serde_json::json;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
 use std::env;
-use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -32,6 +30,7 @@ use warp::{
  * If the variable we want to check is not set, then we'll abort
  * This is for required variables
  */
+#[macro_export]
 macro_rules! env_fetch {
     ($val:expr) => {
         match env::var($val) {
@@ -44,24 +43,25 @@ macro_rules! env_fetch {
     };
 }
 
-
 lazy_static! {
     // TODO better error handling here
     static ref DB: AsyncOnce<Database> = AsyncOnce::new(async { Database::new().await.unwrap() });
+
+    // TODO swap out env vars for params
     static ref SONG_MANAGER: RwLock<SongManager> = RwLock::new(SongManager::new(None, None, None));
     static ref INSTANCE_KEY: String = env_fetch!("INSTANCE_KEY");
     static ref ADMIN_KEY: String = env::var("ADMIN_KEY").unwrap_or_default();
     pub static ref CACHE_DIR: String = env_fetch!("CACHE_DIR");
 
-    // create list of ips that are blocked
-    static ref BLOCKED_LIST: Arc<std::sync::RwLock<BlockedList>> = Arc::new(std::sync::RwLock::new(BlockedList::default())); 
+    // create list of username hashes that are blocked
+    static ref BLOCKED_LIST: Arc<std::sync::RwLock<BlockedList>> = Arc::new(std::sync::RwLock::new(BlockedList::default()));
 
     // create the ratelimiter with the blocked list inside it, this is done seperately to allow
     // only loading the blocked list and not the current list as well
     static ref RATE_LIMIT: Arc<std::sync::Mutex<RateLimiter<'static>>> = Arc::new(std::sync::Mutex::new(RateLimiter::new(&BLOCKED_LIST)));
 
     // max request allowed per a second per an address
-    static ref MAX_RATELIMIT: usize = env_num_or_default!("IP_MAX_COUNT", 50) as usize;
+    static ref MAX_RATELIMIT: usize = env_num_or_default!("RATE_MAX_COUNT", 50) as usize;
 }
 
 const DEFAULT_PORT: u16 = 8080;
@@ -71,11 +71,11 @@ const DEFAULT_QUEUE_COOLDOWN: u32 = 10;
 
 // a list of all the client's ips that connected are stored, this is the max length for that before
 // the list does not get appended to
-const MAX_CLIENT_IP_CACHE: usize = 200;
+const MAX_CLIENT_RATE_CACHE: usize = 200;
 
-const IP_BAN_IN_SECONDS: usize = 60;
+const RATE_BAN_IN_SECONDS: usize = 60;
 
-const IP_BLACKLIST_CYCLE_MS: u32 = 10000;
+const RATE_BLACKLIST_CYCLE_MS: u32 = 10000;
 
 /*
  * These are predefined commands that are valid to send client to client
@@ -86,8 +86,7 @@ const IP_BLACKLIST_CYCLE_MS: u32 = 10000;
  * With the way the database is setup you can only create unique usernames so this *shouldn't* be a
  * security issue
  */
-static CLIENT_COMMANDS: [&'static str; 6] =
-    ["PLAY", "PAUSE", "SKIP", "VOL_UP", "VOL_DOWN", "VOL_SET"];
+static CLIENT_COMMANDS: [&str; 6] = ["PLAY", "PAUSE", "SKIP", "VOL_UP", "VOL_DOWN", "VOL_SET"];
 
 /*
  * While the websocket clients are conneted we store an object so we can send to them
@@ -114,7 +113,7 @@ async fn ws_handler(ws: warp::ws::Ws, clients: Clients) -> Result<impl Reply> {
 }
 
 #[macro_export]
-macro_rules! aquire_db {
+macro_rules! acquire_db {
     ($val:expr) => {
         &$val.get().await
     };
@@ -126,98 +125,95 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
         Err(_) => return,
     };
     let mut locked = clients.lock().await;
-    match locked.get_mut(client_id) {
-        Some(v) => {
-            // potentiall should switch this to it's own function to improve readability, also deal
-            // with the username not supporting spaces in it somehow
-            if !v.auth {
-                let args = msg.split(" ").collect::<Vec<&str>>();
-                match args[0] {
-                    "AUTH" => {
-                        if args.len() != 3
-                            && !(args.len() == 4 && args[3] == &ADMIN_KEY.to_string())
-                        {
-                            // TODO CUSTOM ERROR
-                            warn!("invalid args");
-                            return;
-                        }
-                        match aquire_db!(DB)
-                            .check_if_user_exists_in_auth(args[1], args[2])
-                            .await
-                        {
-                            Ok(r) => {
-                                if r.0 {
-                                    v.username_hash = match r.1 {
-                                        Some(v) => v,
-                                        None => {
-                                            //TODO custom error
-                                            warn!("unhashable username");
-                                            return;
-                                        }
-                                    };
-                                    v.auth = true;
-                                    let _ = aquire_db!(DB)
-                                        .update_login_timestamp(v.username_hash)
-                                        .await;
-                                    if args.len() == 4 && args[3] == &ADMIN_KEY.to_string() {
-                                        if let Ok(admin) =
-                                            aquire_db!(DB).is_admin(v.username_hash).await
-                                        {
-                                            // there are definitely better ways to do this
-                                            if admin {
-                                                v.admin = true;
-                                            }
-                                        }
+    let client = match locked.get_mut(client_id) {
+        Some(v) => v,
+        None => return,
+    };
+    // potentially should switch this to it's own function to improve readability, also deal
+    // with the username not supporting spaces in it somehow
+    if !client.auth {
+        let args = msg.split(' ').collect::<Vec<&str>>();
+        match args[0] {
+            "AUTH" => {
+                if args.len() != 3 && !(args.len() == 4 && args[3] == ADMIN_KEY.to_string()) {
+                    // TODO CUSTOM ERROR
+                    warn!("invalid args");
+                    return;
+                }
+                match acquire_db!(DB)
+                    .check_if_user_exists_in_auth(args[1], args[2])
+                    .await
+                {
+                    Ok(r) => {
+                        if r.0 {
+                            client.username_hash = match r.1 {
+                                Some(v) => v,
+                                None => {
+                                    //TODO custom error
+                                    warn!("unhashable username");
+                                    return;
+                                }
+                            };
+                            client.auth = true;
+                            let _ = acquire_db!(DB)
+                                .update_login_timestamp(client.username_hash)
+                                .await;
+                            if args.len() == 4 && args[3] == ADMIN_KEY.to_string() {
+                                if let Ok(admin) =
+                                    acquire_db!(DB).is_admin(client.username_hash).await
+                                {
+                                    // there are definitely better ways to do this
+                                    if admin {
+                                        client.admin = true;
                                     }
-                                    // TODO proper error handling here
-                                    info!("authenticated user")
-                                } else {
-                                    locked.remove(client_id);
-                                    info!("auth failed, removed client");
                                 }
                             }
-                            Err(e) => {
-                                info!("removed client due to {e}");
-                                locked.remove(client_id);
-                                // TODO RESPOND WITH AUTH FAIL
-                            }
-                        };
+                            // TODO proper error handling here
+                            info!("authenticated user")
+                        } else {
+                            locked.remove(client_id);
+                            info!("auth failed, removed client");
+                        }
                     }
-                    "SIGN" => {
-                        if args.len() != 4 {
-                            // TODO CUSTOM ERROR
-                            warn!("invalid args");
-                            return;
-                        }
-                        if args[3] != INSTANCE_KEY.as_str() {
-                            // TODO CUSTOM ERROR
-                            warn!("invalid instance key");
-                            return;
-                        }
-                        if let Ok(true) = DB
-                            .get()
-                            .await
-                            .check_if_username_exists_in_auth(args[1])
-                            .await
-                        {
-                            warn!("username already exist");
-                            return;
-                        }
-                        // TODO CUSTOM RESPONSE
-                        match aquire_db!(DB).new_user(args[1], args[2]).await {
-                            Ok(_) => info!("inserted user"),
-                            Err(_) => warn!("failed to insert user"),
-                        };
-                        // TODO CUSTOM SUCCESS
+                    Err(e) => {
+                        info!("removed client due to {e}");
+                        locked.remove(client_id);
+                        // TODO RESPOND WITH AUTH FAIL
                     }
-                    _ => return,
                 };
-                return;
             }
-            handle_response(msg, &v, &clients, &client_id).await;
-        }
-        None => {}
+            "SIGN" => {
+                if args.len() != 4 {
+                    // TODO CUSTOM ERROR
+                    warn!("invalid args");
+                    return;
+                }
+                if args[3] != INSTANCE_KEY.as_str() {
+                    // TODO CUSTOM ERROR
+                    warn!("invalid instance key");
+                    return;
+                }
+                if let Ok(true) = DB
+                    .get()
+                    .await
+                    .check_if_username_exists_in_auth(args[1])
+                    .await
+                {
+                    warn!("username already exist");
+                    return;
+                }
+                // TODO CUSTOM RESPONSE
+                match acquire_db!(DB).new_user(args[1], args[2]).await {
+                    Ok(_) => info!("inserted user"),
+                    Err(_) => warn!("failed to insert user"),
+                };
+                // TODO CUSTOM SUCCESS
+            }
+            _ => return,
+        };
+        return;
     }
+    handle_response(msg, client, clients, client_id).await;
 }
 
 /*
@@ -283,8 +279,23 @@ macro_rules! send_to_clients {
     };
 }
 
-// TODO api calls 
-// follow 
+macro_rules! disconnect {
+    ($val:expr, $uuid:expr) => {
+        let connection = &mut $val.lock().await;
+        let client = match connection.get($uuid) {
+            Some(v) => v,
+            None => return,
+        };
+        // Close the connection to the websocket
+        if let Some(sender) = &client.sender {
+            let _ = sender.closed();
+        }
+        connection.remove($uuid);
+        info!("{} disconnected", $uuid);
+    };
+}
+// TODO api calls
+// follow
 // unfollow
 // update userdata - need to check for display name updates to update followers list for other
 // people if needed
@@ -301,165 +312,233 @@ async fn handle_response<'a>(
     client_uuid: &str,
 ) {
     debug!("{msg}");
-    if let Some(v) = msg.find(" ") {
+    if BLOCKED_LIST
+        .read()
+        .unwrap()
+        .list
+        .contains_key(&ws_client.username_hash)
+    {
+        return;
+    }
+    RATE_LIMIT.lock().unwrap().add(ws_client.username_hash);
+    if let Some(v) = msg.find(' ') {
         let command = &msg[..v];
         let message = &msg[v..].trim_start();
         if CLIENT_COMMANDS.contains(&command) {
             send_to_clients!(clients, ws_client, msg);
             return;
         }
-        let args: Vec<&str> = message.split(" ").collect();
+        let args: Vec<&str> = message.split(' ').collect();
         let response = match command {
             "PING" => Some(String::from("PONG")),
             "QUEUE" => {
                 // Send new song to download queue
                 let mut locked = SONG_MANAGER.write().await;
-                locked.request(message.to_string());
-                None
+                Some(String::from(match locked.request(message.to_string()) {
+                    Ok(_) => "AddedSong",
+                    Err(_) => "InvalidRequest",
+                }))
+            }
+            "FOLLOW" => match args.len() {
+                1 => {
+                    match acquire_db!(DB)
+                        .follow_user(ws_client.username_hash, args[0])
+                        .await
+                    {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
+            },
+            "UNFOLLOW" => match args.len() {
+                1 => {
+                    match acquire_db!(DB)
+                        .unfollow_user(ws_client.username_hash, args[0])
+                        .await
+                    {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
             },
             "QUEUE_LIST" => {
                 let locked = SONG_MANAGER.read().await;
                 Some(locked.list_queue())
-            },
-            "FIND_SONG" => {
-                match args.len() {
-                    3 => {
-                        match aquire_db!(DB).find_song_from_details(args[0], args[1], args[2]).await {
-                            Ok(v) => Some(v.to_string()),
-                            Err(_) => None
-                        }
-                    }, 
-                    _ => None
+            }
+            "FIND_SONG" => match args.len() {
+                3 => {
+                    match acquire_db!(DB)
+                        .find_song_from_details(args[0], args[1], args[2])
+                        .await
+                    {
+                        Ok(v) => Some(v.to_string()),
+                        Err(_) => None,
+                    }
                 }
+                _ => None,
             },
-            "REMOVE_SONG" => {
-                match args.len() {
-                    4 => {
-                        match aquire_db!(DB).remove_song(ws_client.username_hash, args[0], args[1], args[2], args[3]).await {
-                            Ok(_) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("CouldNotBeFound"))
-                        }
-                    },
-                    _ => None
+            "REMOVE_SONG" => match args.len() {
+                4 => {
+                    match acquire_db!(DB)
+                        .remove_song(ws_client.username_hash, args[0], args[1], args[2], args[3])
+                        .await
+                    {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("CouldNotBeFound")),
+                    }
                 }
+                _ => None,
             },
-            "SONG_LIST_SHORT" => {
-                match aquire_db!(DB).get_song_list().await {
-                    Ok(v) => Some(v),
-                    Err(_) => None
+            "SONG_LIST_SHORT" => match acquire_db!(DB).get_song_list().await {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            },
+            "ADD_SONG" => match args.len() {
+                4 => {
+                    match acquire_db!(DB)
+                        .append_song(ws_client.username_hash, args[0], args[1], args[2], args[3])
+                        .await
+                    {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("CouldNotFindSong")),
+                    }
                 }
+                _ => None,
             },
-            "ADD_SONG" => {
-                match args.len() {
-                    4 => {
-                        match aquire_db!(DB).append_song(ws_client.username_hash, args[0], args[1], args[2], args[3]).await {
-                            Ok(_) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("CouldNotFindSong"))
-                        }
-                    },
-                    _ => None
-                }
-            },
-            "ADD_SONG_HASH" => {
-                match args.len() {
-                    3 => {
-                        match args[1].parse::<u64>() {
-                            Ok(v) => {
-                                match aquire_db!(DB).append_song_from_hash(ws_client.username_hash, args[0], v).await {
-                                    Ok(()) => Some(String::from("OK")),
-                                    Err(_) => Some(String::from("InvalidHash"))
-                                }
-                            },
-                            Err(_) => Some(String::from("ExpectedHash"))
-                        }
-                    },
-                    _ => None
-                }
-            },
-            "MAKE_PLAYLIST" => {
-                match args.len() {
-                    2 => {
-                        match aquire_db!(DB).create_playlist(ws_client.username_hash, args[0], args[1]).await {
+            "ADD_SONG_HASH" => match args.len() {
+                3 => match args[1].parse::<u64>() {
+                    Ok(v) => {
+                        match acquire_db!(DB)
+                            .append_song_from_hash(ws_client.username_hash, args[0], v)
+                            .await
+                        {
                             Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidHash"))
+                            Err(_) => Some(String::from("InvalidHash")),
                         }
-                    },
-                    _ => None
+                    }
+                    Err(_) => Some(String::from("ExpectedHash")),
+                },
+                _ => None,
+            },
+            "MAKE_PLAYLIST" => match args.len() {
+                2 => {
+                    match acquire_db!(DB)
+                        .create_playlist(ws_client.username_hash, args[0], args[1])
+                        .await
+                    {
+                        Ok(()) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("InvalidHash")),
+                    }
                 }
+                _ => None,
+            },
+            "EDIT_PLAYLIST" => match args.len() {
+                3.. => {
+                    let jsonify: Playlist =
+                        match serde_json::from_str(&message[args[0].len() - 1..]) {
+                            Ok(v) => v,
+                            Err(_) => return,
+                        };
+
+                    match acquire_db!(DB)
+                        .update_playlist(ws_client.username_hash, args[0], jsonify)
+                        .await
+                    {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
             },
             "REMOVE_PLAYLIST" => {
                 match args.len() {
                     1 => {
                         // apply delim change here too, create macro or function for it
-                        match aquire_db!(DB).delete_playlist(ws_client.username_hash, args[0]).await {
+                        match acquire_db!(DB)
+                            .delete_playlist(ws_client.username_hash, args[0])
+                            .await
+                        {
                             Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidHash"))
+                            Err(_) => Some(String::from("InvalidHash")),
                         }
-                    },
-                    _ => None
+                    }
+                    _ => None,
                 }
-            },
-            "SET_PLAYLIST_IMAGE" => {
-                match args.len() {
-                    2 => {
-                        match aquire_db!(DB).set_playlist_image(ws_client.username_hash, args[0], args[1]).await {
-                            Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidHash"))
-                        }
-                    },
-                    _ => None
+            }
+            "SET_PLAYLIST_IMAGE" => match args.len() {
+                2 => {
+                    match acquire_db!(DB)
+                        .set_playlist_image(ws_client.username_hash, args[0], args[1])
+                        .await
+                    {
+                        Ok(()) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("InvalidHash")),
+                    }
                 }
+                _ => None,
             },
             "SET_PLAYLIST_DESCRIPTION" => {
                 match args.len() {
                     2 => {
-                        // TODO 
+                        // TODO
                         // parse with % delim instead of spaces so there can be a name in the
                         // description
                         //
                         // also actually do this for rename playlist and make playlist so there can
                         // be spaces in the names
-                        match aquire_db!(DB).set_playlist_description(ws_client.username_hash, args[0], args[1]).await {
+                        match acquire_db!(DB)
+                            .set_playlist_description(ws_client.username_hash, args[0], args[1])
+                            .await
+                        {
                             Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidDescription"))
+                            Err(_) => Some(String::from("InvalidDescription")),
                         }
-                    },
-                    _ => None
+                    }
+                    _ => None,
                 }
-            },
-            "RENAME_PLAYLIST" => {
-                match args.len() {
-                    2 => {
-                        match aquire_db!(DB).rename_playlist(ws_client.username_hash, args[0], args[1]).await {
-                            Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidHash"))
-                        }
-                    },
-                    _ => None
+            }
+            "RENAME_PLAYLIST" => match args.len() {
+                2 => {
+                    match acquire_db!(DB)
+                        .rename_playlist(ws_client.username_hash, args[0], args[1])
+                        .await
+                    {
+                        Ok(()) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("InvalidHash")),
+                    }
                 }
+                _ => None,
             },
             "REQUEST_USER_DATA" => {
-                match aquire_db!(DB).get_user_data(ws_client.username_hash).await {
+                match acquire_db!(DB).get_user_data(ws_client.username_hash).await {
                     Ok(v) => {
                         let data = json!(&v).to_string();
                         info!("Sending userdata: {data}");
                         Some(data)
                     }
-                    Err(_) => None
+                    Err(_) => None,
                 }
+            }
+            "UPDATE_USERDATA" => match args.len() {
+                3.. => {
+                    let data: UserData = match serde_json::from_str(&message) {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+                    match acquire_db!(DB)
+                        .set_userdata(ws_client.username_hash, data)
+                        .await
+                    {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
             },
             "CLOSE" => {
-                let mut locked = clients.lock().await;
-                let client = match locked.get(client_uuid) {
-                    Some(v) => v,
-                    None => return,
-                };
-                // Close the connection to the websocket
-                if let Some(sender) = &client.sender {
-                    let _ = sender.closed();
-                }
-                locked.remove(client_uuid);
-                info!("{client_uuid} disconnected");
+                disconnect!(clients, client_uuid);
                 None
             }
             _ => None,
@@ -511,16 +590,15 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
         }
     });
 
-
     tokio::spawn(async move {
         // ip blacklist cycle
         loop {
-            tokio::time::sleep(Duration::from_millis(
-                    env_num_or_default!("IP_BLACKLIST_CYCLE_MS", IP_BLACKLIST_CYCLE_MS) as u64,
-            ))
+            tokio::time::sleep(Duration::from_millis(env_num_or_default!(
+                "RATE_BLACKLIST_CYCLE_MS",
+                RATE_BLACKLIST_CYCLE_MS
+            ) as u64))
             .await;
             let mut locked = RATE_LIMIT.lock().unwrap();
-            info!("cycled");
             locked.cycle();
         }
     });
@@ -532,33 +610,16 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
             for (_, v) in locked.list.iter_mut() {
                 *v -= 1;
             }
-            locked.list.retain(|_, v| { v > &mut 0 });
+            locked.list.retain(|_, v| v > &mut 0);
         }
     });
 
     let clients: Clients = Arc::new(Mutex::new(HashMap::new()));
 
-    let log = warp::log::custom(|info: Info| {
-        info!("remote connected");
-        if let Some(v) = info.remote_addr() {
-            info!("remote address: {:#?} connected", v);
-            println!("{:?}", BLOCKED_LIST.read().unwrap().list);
-            println!("{:?}", RATE_LIMIT.lock().unwrap().ip_list);
-            if BLOCKED_LIST.read().unwrap().list.contains_key(&v.ip()) {
-                info!("stopped {:#?} from connecting", v);
-                return;
-            }
-            info!("added {:#?} to rate limit queue", v);
-            let mut locked = RATE_LIMIT.lock().unwrap();
-            locked.add(v);
-        }
-    });
-
     let ws_route = warp::path("seanify")
         .and(warp::ws())
         .and(with_clients(clients.clone()))
-        .and_then(ws_handler)
-        .with(log);
+        .and_then(ws_handler);
 
     let routes = ws_route.with(warp::cors().allow_any_origin());
 
@@ -566,7 +627,8 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
         .and(warp::fs::dir(CACHE_DIR.to_string()))
         .with(warp::compression::gzip());
 
-    let cdn = warp::path(format!("{}-cdn", INSTANCE_KEY.to_string()))
+    // TODO require check for cdndir
+    let cdn = warp::path(format!("{}-cdn", *INSTANCE_KEY))
         .and(warp::fs::dir(env_fetch!("CDN_DIR")))
         .with(warp::compression::gzip());
 
@@ -585,7 +647,7 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
 // to load the total list of ips
 #[derive(Default)]
 struct BlockedList {
-    list: BTreeMap<IpAddr, usize> 
+    list: BTreeMap<u64, usize>,
 }
 
 /*
@@ -601,45 +663,42 @@ struct BlockedList {
  * mutex
  */
 struct RateLimiter<'a> {
-    ip_list: VecDeque<IpAddr>,
-    blocked_list: &'a Arc<std::sync::RwLock<BlockedList>>
+    username_list: VecDeque<u64>,
+    blocked_list: &'a Arc<std::sync::RwLock<BlockedList>>,
 }
 
-impl <'a>RateLimiter<'a> {
+impl<'a> RateLimiter<'a> {
     pub fn new(blocked_list: &'a Arc<std::sync::RwLock<BlockedList>>) -> Self {
-        Self { 
-            ip_list: VecDeque::with_capacity(1),
-            blocked_list
+        Self {
+            username_list: VecDeque::with_capacity(1),
+            blocked_list,
         }
     }
 
-    pub fn add(&mut self, ip: SocketAddr) {
-        if self.ip_list.len() < MAX_CLIENT_IP_CACHE {
-            self.ip_list.push_back(ip.ip());
+    pub fn add(&mut self, username: u64) {
+        if self.username_list.len() < MAX_CLIENT_RATE_CACHE {
+            self.username_list.push_back(username);
         }
-    } 
+    }
 
     pub fn cycle(&mut self) {
-        let _ = self.ip_list.pop_front();
+        let _ = self.username_list.pop_front();
         self.check_if_limited();
     }
 
     fn check_if_limited(&mut self) {
-        // TODO
-        // only check the actual ip not the port too
-        let mut ips = BTreeMap::new();
-        for ip in self.ip_list.iter() {
-            let count = ips.entry(ip).or_insert(0);
+        let mut usernames = BTreeMap::new();
+        for username in self.username_list.iter() {
+            let count = usernames.entry(username).or_insert(0);
             *count += 1;
         }
-        for ip in ips.iter() {
-            if let Some(v) = ips.get(ip.0) {
+        for username in usernames.iter() {
+            if let Some(v) = usernames.get(username.0) {
                 if v > &*MAX_RATELIMIT {
                     let mut locked = self.blocked_list.write().unwrap();
                     // "**" lmao wtf
-                    locked.list.insert(**ip.0, IP_BAN_IN_SECONDS);
+                    locked.list.insert(**username.0, RATE_BAN_IN_SECONDS);
                 }
-
             }
         }
     }
@@ -672,9 +731,9 @@ fn check_env_args() -> anyhow::Result<()> {
         "QUEUE_COOLDOWN",
         "PORT",
         "ADMIN_KEY",
-        "IP_BAN_IN_SECONDS",
-        "IP_MAX_COUNT",
-        "IP_BLACKLIST_CYCLE_MS"
+        "RATE_BAN_IN_SECONDS",
+        "RATE_MAX_COUNT",
+        "RATE_BLACKLIST_CYCLE_MS",
     ];
 
     vars.iter().for_each(|x| check_or_warn_env!(x));
