@@ -1,10 +1,11 @@
-mod db;
-use db::*;
 
+mod db;
+mod image;
+mod user;
 mod songs;
 use songs::*;
-
-mod user;
+use image::*;
+use db::*;
 use user::*;
 
 use crate::user::Playlist;
@@ -517,6 +518,16 @@ async fn handle_response<'a>(
                     _ => None,
                 }
             }
+            "SET_PFP" => {
+                match args.len() {
+                    1 => match save_pfp(ws_client.username_hash, args[0]) {
+                            Ok(_) => Some(String::from("OK")),
+                            Err(_) => None
+                        }
+                    _ => None
+                }
+
+            }
             "REQUEST_USERDATA" => {
                 // TODO fix
                 match acquire_db!(DB).get_user_data(ws_client.username_hash).await {
@@ -530,22 +541,16 @@ async fn handle_response<'a>(
             "REQUEST_PROFILE" => {
                 // this is awful but I'll fix it later
                 match acquire_db!(DB).userhash_from_username(args[0]).await {
-                    Ok(v) => {
-                        match acquire_db!(DB).get_user_data(v.to_u64().unwrap()).await {
-                            Ok(v) => {
-                                match v {
-                                    Some(v) => {
-                                        match v.public_profile {
+                    Ok(v) => match acquire_db!(DB).get_user_data(v.to_u64().unwrap()).await {
+                            Ok(v) => match v {
+                                    Some(v) => match v.public_profile {
                                             Some(true) => Some(serde_json::to_string(&v).unwrap()),
                                             _ => None
                                         }
-                                    }
                                     None => None
-                                }
                             }
                             Err(_) => None
                         }
-                    }
                     Err(_) => None
                 }
             }
