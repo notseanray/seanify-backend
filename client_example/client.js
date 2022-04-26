@@ -10,11 +10,12 @@ const connection = new WebSocket(url);
 connection.onopen = () => {
 	start = new Date();
 	totalrequest++;
-	connection.send("AUTH shafa test");
-	connection.send("REMOVE_PLAYLIST hello")
-	//connection.send("REMOVE_PLAYLIST test")
+	connection.send("AUTH john g")
+	//connection.send("AUTH sameh p")
+	//connection.send("UPDATE_USERDATA {\"public_profile\": true, \"display_name\": \"sampot\", \"share_status\": true, \"public_status\": \"go is better than rust\" }")
+	//connection.send("SET_PLAYLIST_IMAGE shit hello")
+	connection.send("REQUEST_USERDATA ")
 	connection.send("PING ");
-	connection.send("CLOSE");
 }
 
 connection.onerror = (error) => {

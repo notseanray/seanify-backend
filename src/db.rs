@@ -196,7 +196,7 @@ impl Database {
         Ok(())
     }
 
-    async fn userhash_from_username(&self, display_name: &str) -> anyhow::Result<BigD> {
+    pub async fn userhash_from_username(&self, display_name: &str) -> anyhow::Result<BigD> {
         let hash = sqlx::query_as!(
             UserHash,
             "
@@ -210,26 +210,6 @@ WHERE (SELECT (userdata).display_name FROM auth) = $1;
         match hash {
             Some(v) => Ok(v.username),
             None => Err(anyhow!("no user of that name")),
-        }
-    }
-
-    async fn display_name_from_userhash(&self, user_hash: u64) -> anyhow::Result<String> {
-        let hash = sqlx::query_as!(
-            DisplayName,
-            "
-SELECT (userdata).display_name FROM auth 
-WHERE username = $1;
-            ",
-            BigD::from(user_hash)
-        )
-        .fetch_optional(&mut self.database.acquire().await?)
-        .await?;
-        match hash {
-            Some(v) => match v.display_name {
-                Some(v) => Ok(v),
-                None => Err(anyhow!("no user with that hash")),
-            },
-            None => Err(anyhow!("no user with that hash")),
         }
     }
 
@@ -776,7 +756,7 @@ SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);
         let data = sqlx::query_as!(
             UserDataBigD,
             r#"
-SELECT (userdata).* FROM auth WHERE username = $1
+SELECT (userdata).* FROM auth WHERE username = $1;
             "#,
             BigD::from(userhash)
         )

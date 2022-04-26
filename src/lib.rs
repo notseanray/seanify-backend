@@ -25,6 +25,7 @@ use warp::{
     ws::{Message, WebSocket},
     Filter, Rejection, Reply,
 };
+use num_traits::cast::ToPrimitive;
 
 /*
  * If the variable we want to check is not set, then we'll abort
@@ -280,6 +281,7 @@ macro_rules! send_to_clients {
     };
 }
 
+/*
 macro_rules! disconnect {
     ($val:expr, $uuid:expr) => {
         let connection = &mut $val.lock().await;
@@ -294,12 +296,12 @@ macro_rules! disconnect {
         connection.remove($uuid);
         info!("{} disconnected", $uuid);
     };
-}
+}*/
+
+
 // TODO api calls
-// follow
-// unfollow
-// update userdata - need to check for display name updates to update followers list for other
-// people if needed
+// request profiles
+// request Playlist
 
 /*
  * Respond to messages sent from a client, if one of the prestored "client commands" is executed
@@ -325,6 +327,7 @@ async fn handle_response<'a>(
     if let Some(v) = msg.find(' ') {
         let command = &msg[..v];
         let message = &msg[v..].trim_start();
+        debug!("{command}%{message}");
         if CLIENT_COMMANDS.contains(&command) {
             send_to_clients!(clients, ws_client, msg);
             return;
@@ -423,7 +426,7 @@ async fn handle_response<'a>(
                 },
                 _ => None,
             },
-            "MAKE_PLAYLIST" => match args.len() {
+            "CREATE_PLAYLIST" => match args.len() {
                 2 => {
                     match acquire_db!(DB)
                         .create_playlist(ws_client.username_hash, args[0], args[1])
@@ -500,31 +503,59 @@ async fn handle_response<'a>(
                     _ => None,
                 }
             }
-            "RENAME_PLAYLIST" => match args.len() {
-                2 => {
-                    match acquire_db!(DB)
-                        .rename_playlist(ws_client.username_hash, args[0], args[1])
-                        .await
-                    {
-                        Ok(()) => Some(String::from("OK")),
-                        Err(_) => Some(String::from("InvalidHash")),
+            "RENAME_PLAYLIST" => {
+                match args.len() {
+                    2 => {
+                        match acquire_db!(DB)
+                            .rename_playlist(ws_client.username_hash, args[0], args[1])
+                            .await
+                        {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidHash")),
+                        }
                     }
+                    _ => None,
                 }
-                _ => None,
-            },
-            "REQUEST_USER_DATA" => {
+            }
+            "REQUEST_USERDATA" => {
+                // TODO fix
                 match acquire_db!(DB).get_user_data(ws_client.username_hash).await {
                     Ok(v) => {
                         let data = json!(&v).to_string();
-                        info!("Sending userdata: {data}");
                         Some(data)
                     }
                     Err(_) => None,
                 }
             }
+            "REQUEST_PROFILE" => {
+                // this is awful but I'll fix it later
+                match acquire_db!(DB).userhash_from_username(args[0]).await {
+                    Ok(v) => {
+                        match acquire_db!(DB).get_user_data(v.to_u64().unwrap()).await {
+                            Ok(v) => {
+                                match v {
+                                    Some(v) => {
+                                        match v.public_profile {
+                                            Some(true) => Some(serde_json::to_string(&v).unwrap()),
+                                            _ => None
+                                        }
+                                    }
+                                    None => None
+                                }
+                            }
+                            Err(_) => None
+                        }
+                    }
+                    Err(_) => None
+                }
+            }
+            "REQUEST_PLAYLIST" => {
+                unimplemented!();
+                // TODO
+            }
             "UPDATE_USERDATA" => match args.len() {
                 3.. => {
-                    let data: UserData = match serde_json::from_str(&message) {
+                    let data: UserData = match serde_json::from_str(message) {
                         Ok(v) => v,
                         Err(_) => return,
                     };
@@ -536,13 +567,8 @@ async fn handle_response<'a>(
                         Err(_) => None,
                     }
                 }
-                3.. => Some(String::from("OK")),
                 _ => None,
             },
-            "CLOSE" => {
-                disconnect!(clients, client_uuid);
-                None
-            }
             _ => None,
         };
         if let Some(data_out) = response {
@@ -734,8 +760,7 @@ fn check_env_args() -> anyhow::Result<()> {
         "PORT",
         "ADMIN_KEY",
         "RATE_BAN_IN_SECONDS",
-        "RATE_MAX_COUNT",
-        "RATE_BLACKLIST_CYCLE_MS"
+        "RATE_MAX_COUNT"
     ];
 
     vars.iter().for_each(|x| check_or_warn_env!(x));

@@ -4,7 +4,6 @@ use log::{error, info};
 use seahash::hash;
 use std::{collections::VecDeque, path::PathBuf};
 use tokio::{fs::create_dir_all, process::Command};
-
 use youtube_dl::{YoutubeDl, YoutubeDlOutput};
 
 pub(crate) struct Song {
@@ -101,7 +100,6 @@ pub enum SongManagerError {
     QueueLimit,
     InvalidSong,
     FailedToDownload,
-    MaxCacheSizeLimit,
 }
 
 impl fmt::Display for SongManagerError {
@@ -112,8 +110,7 @@ impl fmt::Display for SongManagerError {
             Self::MaxFileSizeLimit => write!(f, "Max file size limit reached"),
             Self::QueueLimit => write!(f, "Queue limit reached"),
             Self::FailedToDownload => write!(f, "Failed to download song from url"),
-            Self::InvalidSong => write!(f, "Provided with invalid song"),
-            Self::MaxCacheSizeLimit => write!(f, "Max Cache Limit Reached"),
+            Self::InvalidSong => write!(f, "Provided with invalid song")
         }
     }
 }
@@ -132,6 +129,8 @@ impl SongManager {
         }
     }
 
+    // TODO  
+    // sound cloud
     pub fn request(&mut self, url: String) -> anyhow::Result<(), SongManagerError> {
         if self.download_queue.len() < env_num_or_default!("QUEUE_LIMIT", 50) as usize {
             self.download_queue.push_back(url);
@@ -154,8 +153,6 @@ impl SongManager {
     pub async fn cycle_queue(&mut self) -> anyhow::Result<(), SongManagerError> {
         // TODO
         // check size of cache dir and return error or not from it
-
-        // MOVE THIS
         if let Some(v) = self.hourly_bandwidth_limit_mb.1 {
             if self.hourly_bandwidth_limit_mb.0 > v * 1024 {
                 return Err(SongManagerError::RateLimitBandwidthMB);
@@ -195,17 +192,19 @@ impl SongManager {
                     "-d",
                     &CACHE_DIR,
                     "-o",
-                    &song.id.unwrap().to_string(),
+                    &song.id.unwrap().to_string(), // FIX this is hashed wrong
                     &song.url.clone().unwrap(),
                 ]) // TODO error handling here
                 .status()
                 .await;
 
+            // CHECK EXIT STATUS
             match cmd {
                 Ok(_) => {
                     info!("downloaded song");
                     song.downloaded = true;
                     // FIX
+                    // REPLACE IF SAME ID
                     DB.get().await.insert_song(song).await.unwrap();
                 }
                 Err(_) => return Err(SongManagerError::FailedToDownload),
