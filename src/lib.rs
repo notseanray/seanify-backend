@@ -1,10 +1,10 @@
 
 mod db;
-mod image;
+mod pictures;
 mod user;
 mod songs;
 use songs::*;
-use image::*;
+use pictures::*;
 use db::*;
 use user::*;
 
@@ -215,7 +215,7 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
         };
         return;
     }
-    handle_response(msg, client, clients, client_id).await;
+    handle_response(msg, client, clients).await;
 }
 
 /*
@@ -313,9 +313,7 @@ async fn handle_response<'a>(
     msg: &str,
     ws_client: &WsClient,
     clients: &Clients,
-    client_uuid: &str,
 ) {
-    debug!("{msg}");
     if BLOCKED_LIST
         .read()
         .unwrap()
@@ -518,15 +516,16 @@ async fn handle_response<'a>(
                     _ => None,
                 }
             }
-            "SET_PFP" => {
-                match args.len() {
-                    1 => match save_pfp(ws_client.username_hash, args[0]) {
-                            Ok(_) => Some(String::from("OK")),
-                            Err(_) => None
-                        }
-                    _ => None
-                }
-
+            "RESET_PFP" => match default_pfp(ws_client.username_hash).await {
+                Ok(_) => { Some(String::from("OK"))},
+                Err(_) => None 
+            }
+            "SET_PFP" => match args.len() {
+                1 => match save_pfp(ws_client.username_hash, args[0].to_string()).await {
+                        Ok(_) => Some(String::from("OK")),
+                        Err(_) => None
+                    }
+                _ => None
             }
             "REQUEST_USERDATA" => {
                 // TODO fix
@@ -618,8 +617,11 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
                 env_num_or_default!("QUEUE_COOLDOWN", DEFAULT_QUEUE_COOLDOWN).into(),
             ))
             .await;
-            let mut locked = SONG_MANAGER.write().await;
-            let _ = locked.cycle_queue().await;
+
+            tokio::spawn(async move { 
+                let mut locked = SONG_MANAGER.write().await;
+                let _ = locked.cycle_queue().await;
+            });
         }
     });
 

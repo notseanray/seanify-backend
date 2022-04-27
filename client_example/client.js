@@ -11,11 +11,12 @@ connection.onopen = () => {
 	start = new Date();
 	totalrequest++;
 	connection.send("AUTH john g")
-	//connection.send("AUTH sameh p")
-	//connection.send("UPDATE_USERDATA {\"public_profile\": true, \"display_name\": \"sampot\", \"share_status\": true, \"public_status\": \"go is better than rust\" }")
-	//connection.send("SET_PLAYLIST_IMAGE shit hello")
-	connection.send("REQUEST_USERDATA ")
-	connection.send("PING ");
+	connection.send("PING ")
+	connection.send("QUEUE https://www.youtube.com/watch?v=2qQWkJKrUf8")
+	connection.send("QUEUE https://www.youtube.com/watch?v=lZDhzMi-RDQ")
+	connection.send("QUEUE_LIST ")
+	//connection.send("RESET_PFP ")
+	connection.send("PING ")
 }
 
 connection.onerror = (error) => {

@@ -1,8 +1,8 @@
-use crate::{env_num_or_default, CACHE_DIR, DB};
+use crate::{env_num_or_default, CACHE_DIR, DB, acquire_db};
 use core::fmt;
 use log::{error, info};
 use seahash::hash;
-use std::{collections::VecDeque, path::PathBuf};
+use std::{collections::VecDeque, path::PathBuf, fs::read_dir};
 use tokio::{fs::create_dir_all, process::Command};
 use youtube_dl::{YoutubeDl, YoutubeDlOutput};
 
@@ -146,38 +146,38 @@ impl SongManager {
 
     pub fn list_queue(&self) -> String {
         let mut queue = String::new();
-        self.download_queue.iter().for_each(|x| queue.push_str(x));
+        self.download_queue.iter().for_each(|x| queue.push_str(&format!("{x} ")));
         queue
     }
 
-    pub async fn cycle_queue(&mut self) -> anyhow::Result<(), SongManagerError> {
+    pub async fn cycle_queue(&mut self) {
         // TODO
         // check size of cache dir and return error or not from it
         if let Some(v) = self.hourly_bandwidth_limit_mb.1 {
             if self.hourly_bandwidth_limit_mb.0 > v * 1024 {
-                return Err(SongManagerError::RateLimitBandwidthMB);
+                return;
             }
         }
 
         if let Some(v) = self.hourly_ytdl_call_max.1 {
             if self.hourly_ytdl_call_max.0 >= v {
-                return Err(SongManagerError::RateLimitYtdlCall);
+                return;
             }
         }
 
         if let Some(url) = self.download_queue.pop_front() {
-            let mut song = match Song::new(&url) {
+            let song = match Song::new(&url) {
                 Ok(v) => v,
-                Err(_) => return Err(SongManagerError::InvalidSong),
+                Err(_) => return,
             };
             if song.title.is_none() || song.title.clone().unwrap_or_default().is_empty() {
-                return Err(SongManagerError::InvalidSong);
+                return;
             }
             self.hourly_ytdl_call_max.0 += 1;
             if let Some(config_max) = self.max_file_size_mb {
                 if let Some(video_size) = song.filesize {
                     if config_max * 1024 < video_size as u64 {
-                        return Err(SongManagerError::MaxFileSizeLimit);
+                        return;
                     }
                 }
             }
@@ -187,29 +187,27 @@ impl SongManager {
                 let _ = create_dir_all(CACHE_DIR.to_string()).await;
             }
 
-            let cmd = Command::new("aria2c")
+            for song in read_dir(CACHE_DIR.to_owned()).unwrap().flatten() {
+                let name = match song.file_name().to_str().unwrap().parse::<u64>() {
+                    Ok(v) => v,
+                    Err(_) => continue 
+                };
+                let _ = acquire_db!(DB).update_downloaded(name).await;
+            }
+
+            // MAKE THIS PROPER
+            //let _ = acquire_db!(DB).remove_duplicate_songs().await;
+
+            let _ = Command::new("aria2c")
                 .args([
                     "-d",
                     &CACHE_DIR,
                     "-o",
                     &song.id.unwrap().to_string(), // FIX this is hashed wrong
                     &song.url.clone().unwrap(),
-                ]) // TODO error handling here
-                .status()
-                .await;
+                ]).spawn();
 
-            // CHECK EXIT STATUS
-            match cmd {
-                Ok(_) => {
-                    info!("downloaded song");
-                    song.downloaded = true;
-                    // FIX
-                    // REPLACE IF SAME ID
-                    DB.get().await.insert_song(song).await.unwrap();
-                }
-                Err(_) => return Err(SongManagerError::FailedToDownload),
-            };
+            DB.get().await.insert_song(song).await.unwrap();
         }
-        Ok(())
     }
 }

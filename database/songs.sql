@@ -11,5 +11,6 @@ CREATE TABLE IF NOT EXISTS songs (
 	artist TEXT,
 	creator TEXT,
 	filesize BIGINT,
+	downloaded_timestamp NUMERIC,	
 	downloaded BOOL NOT NULL
 );

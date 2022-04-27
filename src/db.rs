@@ -6,7 +6,7 @@ use seahash::hash;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
-use sqlx::ConnectOptions;
+use sqlx::{ConnectOptions, Executor};
 use sqlx::Pool;
 use std::env::var;
 use std::thread::sleep;
@@ -169,12 +169,45 @@ impl Database {
         Ok(my_pool)
     }
 
+    pub async fn update_downloaded(&self, hash: u64) -> anyhow::Result<()> { 
+        sqlx::query!(
+            "
+UPDATE songs SET 
+downloaded_timestamp = $3,
+downloaded = $2 
+WHERE id = $1
+            ",
+            BigD::from(hash),
+            true,
+            time!()
+            )
+            .fetch_optional(&mut self.database.acquire().await?)
+            .await?;
+
+        Ok(())
+    }
+
+    // Might have to fix this, I am not good enough at SQL to actually see if this works as
+    // intended since the songs of the same type have the exact same id
+    pub async fn remove_duplicate_songs(&self) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+DELETE FROM songs 
+WHERE downloaded_timestamp IN(SELECT downloaded_timestamp FROM(SELECT downloaded_timestamp, ROW_NUMBER() OVER(PARTITION BY id ORDER BY downloaded_timestamp)
+as row_num FROM songs) t WHERE t.row_num > 1);
+            ")
+            .fetch_optional(&mut self.database.acquire().await?)
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn insert_song(&self, song: Song) -> anyhow::Result<()> {
         sqlx::query!(
             "
  INSERT INTO songs(id, title, upload_date, uploader, url, genre,\
- thumbnail, album, album_artist, artist, creator, filesize, downloaded)
- VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
+ thumbnail, album, album_artist, artist, creator, filesize, downloaded_timestamp, downloaded)
+ VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
              ",
             to_big_d!(song.id),
             song.title,
@@ -188,7 +221,8 @@ impl Database {
             song.artist,
             song.creator,
             song.filesize,
-            true
+            BigD::from(0),
+            false
         )
         .fetch_optional(&mut self.database.acquire().await?)
         .await?;

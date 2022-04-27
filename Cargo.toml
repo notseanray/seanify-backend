@@ -24,7 +24,9 @@ youtube_dl = { version = "0.7.0", features = ["yt-dlp", "tokio"], default-featur
 serde = { version = "1.0.36", features = ["derive"] }
 serde_json = "1.0.79"
 num-traits = "0.2.14"
-photon-rs = "0.3.1"
+rand = "0.8.5"
+image = "0.24.2"
+base64 = "0.13.0"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
@@ -38,5 +40,6 @@ profile-rustflags = [
 profile-rustflags = [
 	"-C", "link-arg=-fuse-ld=lld"
 ]
-strip = "debuginfo"
+strip = true
 panic = "abort"
+symbols = "stri"
