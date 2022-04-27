@@ -3,5 +3,6 @@
 /client_example/node_modules
 /seanify-backend
 /cache
+/assets
 logfile
 seanify

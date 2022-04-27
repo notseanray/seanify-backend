@@ -9,7 +9,7 @@ psql:
 
 prepare:
 	-mkdir -p ../seanify/$(DBNAME)
-	cd ../seanify && initdb -D $(DBNAME)
+	-cd ../seanify && initdb -D $(DBNAME)
 	-cd ../seanify && createdb --port=6000 $(DBNAME)
 	-cp .env ../seanify
 	cd ../seanify && pg_ctl --port=$(PORT) -D $(DBNAME) -l logfile start

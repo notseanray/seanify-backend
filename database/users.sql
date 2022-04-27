@@ -12,14 +12,12 @@ CREATE TABLE IF NOT EXISTS Playlist (
 	name TEXT NOT NULL,
 	creation_timestamp NUMERIC NOT NULL,
 	description TEXT,
-	image TEXT,
 	public_playlist BOOL NOT NULL,
 	last_update NUMERIC NOT NULL
 );
 
 CREATE TYPE UserData AS (
 	public_profile BOOL,
-	profile_picture TEXT,
 	display_name TEXT,
 	share_status BOOL,
 	now_playing TEXT,
@@ -28,5 +26,3 @@ CREATE TYPE UserData AS (
 	followers NUMERIC[],
 	following NUMERIC[]
 );
-
--- SELECT (userdata).test, (userdata).display FROM auth WHERE username = $1

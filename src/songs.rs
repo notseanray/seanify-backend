@@ -1,6 +1,6 @@
 use crate::{acquire_db, env_num_or_default, CACHE_DIR, DB};
 use core::fmt;
-use log::{error, info};
+use log::error;
 use seahash::hash;
 use std::{collections::VecDeque, fs::read_dir, path::PathBuf};
 use tokio::{fs::create_dir_all, process::Command};
@@ -19,7 +19,6 @@ pub(crate) struct Song {
     pub artist: Option<String>,
     pub creator: Option<String>,
     pub filesize: Option<i64>,
-    pub downloaded: bool,
 }
 
 pub enum SongError {
@@ -78,7 +77,6 @@ impl Song {
                     artist: v.artist,
                     creator: v.creator,
                     filesize: v.filesize,
-                    downloaded: false,
                 })
             }
             _ => Err(SongError::NotSingleVideo),
@@ -99,7 +97,6 @@ pub enum SongManagerError {
     MaxFileSizeLimit,
     QueueLimit,
     InvalidSong,
-    FailedToDownload,
 }
 
 impl fmt::Display for SongManagerError {
@@ -109,7 +106,6 @@ impl fmt::Display for SongManagerError {
             Self::RateLimitBandwidthMB => write!(f, "Unable to download due to network error"),
             Self::MaxFileSizeLimit => write!(f, "Max file size limit reached"),
             Self::QueueLimit => write!(f, "Queue limit reached"),
-            Self::FailedToDownload => write!(f, "Failed to download song from url"),
             Self::InvalidSong => write!(f, "Provided with invalid song"),
         }
     }
@@ -152,34 +148,34 @@ impl SongManager {
         queue
     }
 
-    pub async fn cycle_queue(&mut self) {
+    pub async fn cycle_queue(&mut self) -> anyhow::Result<(), SongManagerError> {
         // TODO
         // check size of cache dir and return error or not from it
         if let Some(v) = self.hourly_bandwidth_limit_mb.1 {
             if self.hourly_bandwidth_limit_mb.0 > v * 1024 {
-                return;
+                return Err(SongManagerError::RateLimitBandwidthMB);
             }
         }
 
         if let Some(v) = self.hourly_ytdl_call_max.1 {
             if self.hourly_ytdl_call_max.0 >= v {
-                return;
+                return Err(SongManagerError::RateLimitYtdlCall);
             }
         }
 
         if let Some(url) = self.download_queue.pop_front() {
             let song = match Song::new(&url) {
                 Ok(v) => v,
-                Err(_) => return,
+                Err(_) => return Err(SongManagerError::InvalidSong),
             };
             if song.title.is_none() || song.title.clone().unwrap_or_default().is_empty() {
-                return;
+                return Err(SongManagerError::InvalidSong);
             }
             self.hourly_ytdl_call_max.0 += 1;
             if let Some(config_max) = self.max_file_size_mb {
                 if let Some(video_size) = song.filesize {
                     if config_max * 1024 < video_size as u64 {
-                        return;
+                        return Err(SongManagerError::MaxFileSizeLimit);
                     }
                 }
             }
@@ -198,7 +194,7 @@ impl SongManager {
             }
 
             // MAKE THIS PROPER
-            //let _ = acquire_db!(DB).remove_duplicate_songs().await;
+            let _ = acquire_db!(DB).remove_duplicate_songs().await;
 
             let _ = Command::new("aria2c")
                 .args([
@@ -212,5 +208,6 @@ impl SongManager {
 
             DB.get().await.insert_song(song).await.unwrap();
         }
+        Ok(())
     }
 }

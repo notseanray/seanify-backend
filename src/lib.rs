@@ -4,6 +4,7 @@ mod songs;
 mod user;
 use db::*;
 use pictures::*;
+use seahash::hash;
 use songs::*;
 use user::*;
 
@@ -203,12 +204,13 @@ async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
                     warn!("username already exist");
                     return;
                 }
-                // TODO CUSTOM RESPONSE
                 match acquire_db!(DB).new_user(args[1], args[2]).await {
-                    Ok(_) => info!("inserted user"),
+                    Ok(_) => {
+                        info!("inserted user");
+                        let _ = default_pfp(hash(args[1].as_bytes())).await;
+                    }
                     Err(_) => warn!("failed to insert user"),
                 };
-                // TODO CUSTOM SUCCESS
             }
             _ => return,
         };
@@ -328,6 +330,8 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
         let args: Vec<&str> = message.split(' ').collect();
         let response = match command {
             "PING" => Some(String::from("PONG")),
+            // request a new song to be downloaded to queue, anything after the first word in
+            // plaintext is considered the url
             "QUEUE" => {
                 // Send new song to download queue
                 let mut locked = SONG_MANAGER.write().await;
@@ -336,6 +340,8 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     Err(_) => "InvalidRequest",
                 }))
             }
+            // Follow a new user, updates two rows to show that you followed on their profile and
+            // to add to your followers list
             "FOLLOW" => match args.len() {
                 1 => {
                     match acquire_db!(DB)
@@ -347,7 +353,8 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
+            }
+            // Does the inverse of follow, again updating two rows
             "UNFOLLOW" => match args.len() {
                 1 => {
                     match acquire_db!(DB)
@@ -359,11 +366,27 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
+            }
+            // return plain text formatted song url download queue 
             "QUEUE_LIST" => {
                 let locked = SONG_MANAGER.read().await;
                 Some(locked.list_queue())
             }
+            // return all new songs in json format that were inputed after the given timestamp, to
+            // completely resync you would send 0 as the timestamp since all songs that are
+            // actually downloaded are sent
+            "SYNC_LIB" => match args.len() {
+                1 => match args[0].parse::<u64>() {
+                    Ok(v) => match acquire_db!(DB).sync_library(v).await {
+                        Ok(v) => Some(v),
+                        Err(e) => Some(e.to_string())
+                    }
+                    Err(_) => None
+                }
+                _ => None
+            }
+            // return the hash/id of a song from the song_name, uploader on yt, and the release
+            // date as a string
             "FIND_SONG" => match args.len() {
                 3 => {
                     match acquire_db!(DB)
@@ -375,7 +398,9 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
+            }
+            // remove song from playlist, based on the playlist_name, song_name, the author, and
+            // release date as a string
             "REMOVE_SONG" => match args.len() {
                 4 => {
                     match acquire_db!(DB)
@@ -387,15 +412,26 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
-            "SONG_LIST_SHORT" => match acquire_db!(DB).get_song_list().await {
+            }
+            // return information from the songs table, useful for first client setup and can be
+            // used instead of sync lib with 0 timestamp
+            "SONG_LIST_FULL" => match acquire_db!(DB).get_song_list().await {
                 Ok(v) => Some(v),
                 Err(_) => None,
-            },
+            }
+            // add song to playlist based on playlist_name, song_name, song_author, song_release
+            //
+            // Internally this just hashes them to find the id
             "ADD_SONG" => match args.len() {
                 4 => {
                     match acquire_db!(DB)
-                        .append_song(ws_client.username_hash, args[0], args[1], args[2], args[3])
+                        .append_song(
+                            ws_client.username_hash, 
+                            &args[0].replace('%', " "), 
+                            args[1], 
+                            args[2], 
+                            args[3]
+                        )
                         .await
                     {
                         Ok(_) => Some(String::from("OK")),
@@ -403,7 +439,9 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
+            }
+            // similar to above but directly uses the hash if the client has a local copy of the
+            // hashes
             "ADD_SONG_HASH" => match args.len() {
                 3 => match args[1].parse::<u64>() {
                     Ok(v) => {
@@ -418,11 +456,18 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     Err(_) => Some(String::from("ExpectedHash")),
                 },
                 _ => None,
-            },
+            }
+            // create a new playlist assigning it a name and marking if it's public or not with
+            // "true" or "false" 
+            // ^ not caps sensitive
             "CREATE_PLAYLIST" => match args.len() {
                 2 => {
                     match acquire_db!(DB)
-                        .create_playlist(ws_client.username_hash, args[0], args[1])
+                        .create_playlist(
+                            ws_client.username_hash, 
+                            &args[0].replace('%', " "), 
+                            args[1]
+                        )
                         .await
                     {
                         Ok(()) => Some(String::from("OK")),
@@ -430,17 +475,22 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
+            }
+            // updates playlist data based on json data sent, kinda unstable but *should* work,
+            // requires that the playlist name is provided 
             "EDIT_PLAYLIST" => match args.len() {
                 3.. => {
                     let jsonify: Playlist =
-                        match serde_json::from_str(&message[args[0].len() - 1..]) {
+                        match serde_json::from_str(&message[args[0].len()..]) {
                             Ok(v) => v,
                             Err(_) => return,
                         };
 
                     match acquire_db!(DB)
-                        .update_playlist(ws_client.username_hash, args[0], jsonify)
+                        .update_playlist(
+                            ws_client.username_hash, 
+                            &args[0].replace('%', " "), 
+                            jsonify)
                         .await
                     {
                         Ok(_) => Some(String::from("OK")),
@@ -448,26 +498,16 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
-            "REMOVE_PLAYLIST" => {
-                match args.len() {
-                    1 => {
-                        // apply delim change here too, create macro or function for it
-                        match acquire_db!(DB)
-                            .delete_playlist(ws_client.username_hash, args[0])
-                            .await
-                        {
-                            Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidHash")),
-                        }
-                    }
-                    _ => None,
-                }
             }
-            "SET_PLAYLIST_IMAGE" => match args.len() {
-                2 => {
+            // remove playlist providing it's name
+            "REMOVE_PLAYLIST" => match args.len() {
+                1 => {
+                    // apply delim change here too, create macro or function for it
                     match acquire_db!(DB)
-                        .set_playlist_image(ws_client.username_hash, args[0], args[1])
+                        .delete_playlist(
+                            ws_client.username_hash, 
+                            &args[0].replace('%', " ")
+                        )
                         .await
                     {
                         Ok(()) => Some(String::from("OK")),
@@ -475,18 +515,51 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
+            }
+            // Set the playlist image providing the playlistname and a base64 encoded string of the
+            // png (must be 400x400 pixels unless set otherwise)
+            //
+            // the resolution is checked before saving
+            "SET_PLAYLIST_IMAGE" => match args.len() {
+                2 => {
+                    match acquire_db!(DB)
+                        .set_playlist_image(ws_client.username_hash, args[0], args[1])
+                        .await
+                    {
+                        Ok(()) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("InvalidBase64")),
+                    }
+                }
+                _ => None,
+            }
+            // remove the custom playlist image, internally generates a new random art that is used
+            // for the playlist 
+            //
+            // this is intended to always return an image for either profile picture of playlist
+            // art
+            "REMOVE_PLAYLIST_IMAGE" => match args.len() {
+                1 => {
+                    match acquire_db!(DB)
+                        .remove_playlist_image(ws_client.username_hash, args[0])
+                        .await
+                    {
+                        Ok(()) => Some(String::from("OK")),
+                        Err(_) => None,
+                    }
+                }
+                _ => None,
+            }
+            // Set the playlist description, to get around the fact that we cannot have spaces in
+            // the argument splitting we have a % as a placeholder for space
             "SET_PLAYLIST_DESCRIPTION" => {
                 match args.len() {
                     2 => {
-                        // TODO
-                        // parse with % delim instead of spaces so there can be a name in the
-                        // description
-                        //
-                        // also actually do this for rename playlist and make playlist so there can
-                        // be spaces in the names
                         match acquire_db!(DB)
-                            .set_playlist_description(ws_client.username_hash, args[0], args[1])
+                            .set_playlist_description(
+                                ws_client.username_hash, 
+                                args[0], 
+                                &args[1].replace('%', " ")
+                            )
                             .await
                         {
                             Ok(()) => Some(String::from("OK")),

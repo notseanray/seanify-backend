@@ -1,10 +1,6 @@
-use crate::env_fetch;
 use crate::BigD;
-use log::error;
 use num_traits::cast::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use std::env;
-use tokio::fs::create_dir;
 
 // To insert into postgres they must be of all optional type which is slightly inconvient
 
@@ -12,14 +8,12 @@ use tokio::fs::create_dir;
 pub(crate) struct Playlist {
     pub name: String,                // limit to 30 char
     pub description: Option<String>, // limit to 100 char
-    pub image: Option<String>,       // limit to 200 char
     pub public_playlist: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct UserData {
     pub public_profile: Option<bool>,
-    pub profile_picture: Option<String>,
     pub display_name: Option<String>, //limit to 30 char
     pub share_status: Option<bool>,
     pub now_playing: Option<String>, // keep under 50 char
@@ -31,7 +25,6 @@ pub(crate) struct UserData {
 
 pub(crate) struct UserDataBigD {
     pub public_profile: Option<bool>,
-    pub profile_picture: Option<String>,
     pub display_name: Option<String>, //limit to 30 char
     pub share_status: Option<bool>,
     pub now_playing: Option<String>, // keep under 50 char
@@ -45,7 +38,6 @@ impl From<UserDataBigD> for UserData {
     fn from(data: UserDataBigD) -> Self {
         Self {
             public_profile: data.public_profile,
-            profile_picture: data.profile_picture,
             display_name: data.display_name,
             share_status: data.share_status,
             now_playing: data.now_playing,
@@ -66,12 +58,5 @@ impl From<UserDataBigD> for UserData {
                     .collect::<Vec<u64>>(),
             ),
         }
-    }
-}
-
-impl UserData {
-    pub(crate) async fn save_playlist_image(&mut self, base64: &str) -> anyhow::Result<()> {
-        let _ = create_dir(env_fetch!("CDN_DIR")).await;
-        Ok(())
     }
 }

@@ -1,3 +1,4 @@
+use crate::pictures::{default_playlist_image, save_playlist_image};
 use crate::user::Playlist;
 use crate::{UserData, UserDataBigD};
 use anyhow::anyhow;
@@ -6,12 +7,14 @@ use seahash::hash;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
+use sqlx::ConnectOptions;
 use sqlx::Pool;
-use sqlx::{ConnectOptions, Executor};
-use std::env::var;
+use std::env::{self, var};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::fs::remove_file;
 
+use crate::env_fetch;
 use crate::songs::Song;
 
 const DEFAULT_MAX_CONNECTIONS: u32 = 3;
@@ -33,19 +36,24 @@ struct Exists {
     pub exists: Option<bool>,
 }
 
+// Used to fetch hash directly from database, postgres does not have a u64 datatype so NUMERIC must
+// be used, which needs BigDecimal
 struct UserHash {
     pub username: BigD,
 }
 
+// Used to fetch the user displayname from the hash
 struct DisplayName {
     pub display_name: Option<String>,
 }
 
+// return the first x amount of characters in a string (and should be unicode safe)
 macro_rules! truncate {
     ($val:expr, $len:expr) => {
         $val.map(|v| match v.len() > $len {
             true => {
                 let mut new_input = String::with_capacity($len);
+                // use chars() instead of index to prevent panics
                 let shortened = &v.chars().collect::<Vec<char>>()[..$len];
                 shortened.iter().for_each(|x| new_input.push(*x));
                 new_input
@@ -55,6 +63,7 @@ macro_rules! truncate {
     };
 }
 
+// return seconds since unix epoch as a BigDecimal
 macro_rules! time {
     () => {
         BigD::from(
@@ -79,14 +88,18 @@ impl UserAuth {
     }
 }
 
+// DatabasePool
 pub(crate) struct Database {
     pub database: Pool<Postgres>,
 }
 
+// When we look up just the hash of a song we have to use a struct to return it's id/hash
 struct SongLookupResult {
     id: BigD,
 }
 
+// result from fetching a song from the database, when a client wants to look up a song it recieves
+// this data
 #[derive(Serialize)]
 pub(crate) struct SongTitleResult {
     pub title: String,
@@ -97,6 +110,7 @@ pub(crate) struct SongTitleResult {
     pub artist: Option<String>,
     pub creator: Option<String>,
     pub upload_date: Option<String>,
+    pub downloaded: bool,
 }
 
 struct SongDetails {
@@ -123,8 +137,7 @@ macro_rules! env_num_or_default {
             Ok(v) => v,
             Err(e) => {
                 error!(
-                    "{} is invalid due to: {e}, \
-using default of {}",
+                    "{} is invalid due to: {e}, using default of {}",
                     $val, $default
                 );
                 $default
@@ -172,10 +185,13 @@ impl Database {
     pub async fn update_downloaded(&self, hash: u64) -> anyhow::Result<()> {
         sqlx::query!(
             "
-UPDATE songs SET 
-downloaded_timestamp = $3,
-downloaded = $2 
-WHERE id = $1
+UPDATE 
+    songs 
+SET 
+    downloaded_timestamp = $3,
+    downloaded = $2 
+WHERE 
+    id = $1;
             ",
             BigD::from(hash),
             true,
@@ -189,24 +205,75 @@ WHERE id = $1
 
     // Might have to fix this, I am not good enough at SQL to actually see if this works as
     // intended since the songs of the same type have the exact same id
+    //
+    // remove old copies of a song if they are redownloaded, (based off id only)
     pub async fn remove_duplicate_songs(&self) -> anyhow::Result<()> {
         sqlx::query!(
             "
-DELETE FROM songs 
-WHERE downloaded_timestamp IN(SELECT downloaded_timestamp FROM(SELECT downloaded_timestamp, ROW_NUMBER() OVER(PARTITION BY id ORDER BY downloaded_timestamp)
-as row_num FROM songs) t WHERE t.row_num > 1);
-            ")
-            .fetch_optional(&mut self.database.acquire().await?)
-            .await?;
+DELETE FROM 
+    songs s 
+    USING songs b 
+WHERE 
+    s.downloaded_timestamp < b.downloaded_timestamp
+    AND s.id = b.id;
+            "
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
 
         Ok(())
+    }
+
+    pub async fn sync_library(&self, timestamp: u64) -> anyhow::Result<String> {
+        let data: Vec<SongTitleResult> = sqlx::query_as!(
+            SongTitleResult,
+            "
+SELECT 
+    title, 
+    uploader, 
+    thumbnail, 
+    album, 
+    album_artist, 
+    artist, 
+    creator, 
+    upload_date, 
+    downloaded 
+FROM 
+    songs
+WHERE
+    downloaded_timestamp > $1
+            ",
+            BigD::from(timestamp)
+        )
+            .fetch_all(&mut self.database.acquire().await?)
+            .await?;
+
+        match serde_json::to_string(&data) {
+            Ok(v) => Ok(v),
+            Err(_) => Err(anyhow!("FailedToSync"))
+        }
     }
 
     pub async fn insert_song(&self, song: Song) -> anyhow::Result<()> {
         sqlx::query!(
             "
- INSERT INTO songs(id, title, upload_date, uploader, url, genre,\
- thumbnail, album, album_artist, artist, creator, filesize, downloaded_timestamp, downloaded)
+ INSERT INTO 
+    songs(
+        id, 
+        title, 
+        upload_date, 
+        uploader, 
+        url, 
+        genre,
+        thumbnail, 
+        album, 
+        album_artist, 
+        artist, 
+        creator, 
+        filesize, 
+        downloaded_timestamp, 
+        downloaded
+    )
  VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
              ",
             to_big_d!(song.id),
@@ -234,8 +301,17 @@ as row_num FROM songs) t WHERE t.row_num > 1);
         let hash = sqlx::query_as!(
             UserHash,
             "
-SELECT username FROM auth 
-WHERE (SELECT (userdata).display_name FROM auth) = $1;
+SELECT 
+    username 
+FROM 
+    auth 
+WHERE 
+    (
+        SELECT 
+            (userdata).display_name 
+        FROM 
+            auth
+    ) = $1;
             ",
             display_name.to_owned(),
         )
@@ -251,9 +327,20 @@ WHERE (SELECT (userdata).display_name FROM auth) = $1;
         let hash = self.userhash_from_username(name_to_unfollow).await?;
         sqlx::query!(
             "
-UPDATE auth SET
-userdata.following = array_remove((SELECT (userdata).following FROM auth), $1)
-WHERE username = $2; 
+UPDATE 
+    auth 
+SET
+    userdata.following = array_remove(
+        (
+            SELECT 
+                (userdata).following 
+            FROM 
+                auth
+        ), 
+        $1
+    )
+WHERE 
+    username = $2; 
             ",
             hash,
             BigD::from(userhash)
@@ -263,9 +350,19 @@ WHERE username = $2;
 
         sqlx::query!(
             "
-UPDATE auth SET
-userdata.followers = array_remove((SELECT (userdata).followers FROM auth), $1)
-WHERE username = $2; 
+UPDATE 
+    auth 
+SET
+    userdata.followers = array_remove(
+        (
+            SELECT 
+                (userdata).followers 
+            FROM 
+                auth
+        ), 
+        $1)
+WHERE 
+    username = $2; 
             ",
             BigD::from(userhash),
             hash
@@ -279,9 +376,19 @@ WHERE username = $2;
         let hash = self.userhash_from_username(name_to_follow).await?;
         sqlx::query!(
             "
-UPDATE auth SET
-userdata.following = array_append((SELECT (userdata).following FROM auth), $1)
-WHERE username = $2; 
+UPDATE 
+    auth 
+SET
+    userdata.following = array_append(
+        (
+            SELECT 
+                (userdata).following 
+            FROM 
+                auth
+        ), 
+        $1)
+WHERE 
+    username = $2; 
             ",
             hash,
             BigD::from(userhash)
@@ -291,9 +398,19 @@ WHERE username = $2;
 
         sqlx::query!(
             "
-UPDATE auth SET
-userdata.followers = array_append((SELECT (userdata).followers FROM auth), $1)
-WHERE username = $2; 
+UPDATE 
+    auth 
+SET
+    userdata.followers = array_append(
+        (
+            SELECT 
+                (userdata).followers 
+            FROM 
+                auth
+        ), 
+        $1)
+WHERE 
+    username = $2; 
             ",
             self.userhash_from_username(name_to_follow).await?,
             hash
@@ -307,7 +424,13 @@ WHERE username = $2;
         let user = UserAuth::new(username, password);
         sqlx::query!(
             "
-INSERT INTO auth(username, password, admin, last_login)
+INSERT INTO 
+    auth(
+        username, 
+        password, 
+        admin, 
+        last_login
+    )
 VALUES($1, $2, false, $3);
             ",
             user.username,
@@ -320,16 +443,19 @@ VALUES($1, $2, false, $3);
         let data = UserData::default();
         sqlx::query!(
             "
-UPDATE auth SET
-userdata.public_profile = $1, 
-userdata.display_name = $2, 
-userdata.share_status = $3, 
-userdata.now_playing = $4, 
-userdata.public_status = $5, 
-userdata.recent_plays = $6, 
-userdata.followers = $7, 
-userdata.following = $8
-WHERE username = $9;
+UPDATE 
+    auth 
+SET
+    userdata.public_profile = $1, 
+    userdata.display_name = $2, 
+    userdata.share_status = $3, 
+    userdata.now_playing = $4, 
+    userdata.public_status = $5, 
+    userdata.recent_plays = $6, 
+    userdata.followers = $7, 
+    userdata.following = $8
+WHERE 
+    username = $9;
             ",
             data.public_profile,
             data.display_name,
@@ -361,8 +487,12 @@ WHERE username = $9;
         let mut names = sqlx::query_as!(
             DisplayName,
             "
-SELECT (userdata).display_name FROM auth 
-WHERE (userdata).display_name = $1;
+SELECT 
+    (userdata).display_name 
+FROM 
+    auth 
+WHERE 
+    (userdata).display_name = $1;
             ",
             name
         )
@@ -384,14 +514,17 @@ WHERE (userdata).display_name = $1;
 
         sqlx::query!(
             "
-UPDATE auth SET
-userdata.public_profile = $1, 
-userdata.display_name = $2, 
-userdata.share_status = $3, 
-userdata.now_playing = $4, 
-userdata.public_status = $5, 
-userdata.recent_plays = $6
-WHERE username = $7;
+UPDATE 
+    auth 
+SET
+    userdata.public_profile = $1, 
+    userdata.display_name = $2, 
+    userdata.share_status = $3, 
+    userdata.now_playing = $4, 
+    userdata.public_status = $5, 
+    userdata.recent_plays = $6
+WHERE 
+    username = $7;
             ",
             new_data.public_profile,
             new_data.display_name,
@@ -411,7 +544,18 @@ WHERE username = $7;
         let result = sqlx::query_as!(
             SongTitleResult,
             "
-SELECT title, uploader, thumbnail, album, album_artist, artist, creator, upload_date FROM songs;
+SELECT 
+    title, 
+    uploader, 
+    thumbnail, 
+    album, 
+    album_artist, 
+    artist, 
+    creator, 
+    upload_date, 
+    downloaded 
+FROM 
+    songs;
                 "
         )
         .fetch_all(&mut self.database.acquire().await?)
@@ -430,8 +574,13 @@ SELECT title, uploader, thumbnail, album, album_artist, artist, creator, upload_
         let result = sqlx::query_as!(
             SongLookupResult,
             "
-SELECT id FROM songs
-WHERE title = $1 AND creator = $2 AND upload_date = $3;
+SELECT 
+    id 
+FROM 
+    songs
+WHERE 
+    title = $1 AND creator = $2 
+    AND upload_date = $3;
             ",
             song_name,
             song_author, // refactor? this is misleading as it's the yt uploader NOT the artist/author of song
@@ -456,8 +605,12 @@ WHERE title = $1 AND creator = $2 AND upload_date = $3;
     ) -> anyhow::Result<()> {
         sqlx::query!(
             "
-DELETE FROM playlistdata
-WHERE username = $1 AND playlist_name = $2 AND song_hash = $3;
+DELETE FROM 
+    playlistdata
+WHERE 
+    username = $1 
+    AND playlist_name = $2 
+    AND song_hash = $3;
             ",
             BigD::from(username),
             playlist_name, // check if valid playlist
@@ -478,8 +631,12 @@ WHERE username = $1 AND playlist_name = $2 AND song_hash = $3;
         let result = sqlx::query_as!(
             SongDetails,
             "
-SELECT id, title FROM songs
-WHERE id = $1;
+SELECT 
+    id, title 
+FROM 
+    songs
+WHERE 
+    id = $1;
             ",
             BigD::from(song_hash)
         )
@@ -504,16 +661,18 @@ WHERE id = $1;
 
         data.description = truncate!(data.description, 200);
 
-        data.image = truncate!(data.image, 200);
-
         sqlx::query!(
             "
-UPDATE playlist SET
-name = $1,
-description = $2,
-public_playlist = $3,
-last_update = $4
-WHERE username = $5 AND name = $6
+UPDATE 
+    playlist 
+SET
+    name = $1,
+    description = $2,
+    public_playlist = $3,
+    last_update = $4
+WHERE 
+    username = $5 
+    AND name = $6
             ",
             data.name,
             data.description,
@@ -539,13 +698,14 @@ WHERE username = $5 AND name = $6
         let song = self.find_song_from_hash(song_hash).await?;
         sqlx::query!(
             "
-INSERT INTO playlistdata(
-    username,
-    playlist_name,
-    song_hash,
-    song_name,
-    date_added
-)
+INSERT INTO 
+    playlistdata(
+        username,
+        playlist_name,
+        song_hash,
+        song_name,
+        date_added
+    )
 VALUES($1, $2, $3, $4, $5);
             ",
             BigD::from(username),
@@ -573,13 +733,14 @@ VALUES($1, $2, $3, $4, $5);
     ) -> anyhow::Result<()> {
         sqlx::query!(
             "
-INSERT INTO playlistdata(
-    username,
-    playlist_name,
-    song_hash,
-    song_name,
-    date_added
-)
+INSERT INTO 
+    playlistdata(
+        username,
+        playlist_name,
+        song_hash,
+        song_name,
+        date_added
+    )
 VALUES($1, $2, $3, $4, $5);
             ",
             BigD::from(username),
@@ -608,8 +769,13 @@ VALUES($1, $2, $3, $4, $5);
     ) -> anyhow::Result<()> {
         sqlx::query!(
             "
-UPDATE playlist SET last_update = $1
-WHERE username = $2 AND name = $3
+UPDATE 
+    playlist 
+SET 
+    last_update = $1
+WHERE 
+    username = $2 
+    AND name = $3;
                 ",
             time!(),
             BigD::from(username),
@@ -625,7 +791,16 @@ WHERE username = $2 AND name = $3
         let result = sqlx::query_as!(
             Exists,
             "
-SELECT EXISTS(SELECT 1 FROM playlist WHERE username = $1 AND name = $2 LIMIT 1);
+SELECT EXISTS(
+    SELECT 
+        1 
+    FROM 
+        playlist 
+    WHERE 
+        username = $1 
+        AND name = $2 
+    LIMIT 1
+);
             ",
             BigD::from(username),
             name
@@ -659,7 +834,14 @@ SELECT EXISTS(SELECT 1 FROM playlist WHERE username = $1 AND name = $2 LIMIT 1);
 
         sqlx::query!(
             "
-INSERT INTO playlist(username, name, creation_timestamp, public_playlist, last_update)
+INSERT INTO 
+    playlist(
+        username, 
+        name, 
+        creation_timestamp, 
+        public_playlist, 
+        last_update
+    )
 VALUES($1, $2, $3, $4, $5);
             ",
             BigD::from(username),
@@ -670,6 +852,9 @@ VALUES($1, $2, $3, $4, $5);
         )
         .fetch_optional(&mut self.database.acquire().await?)
         .await?;
+
+        default_playlist_image(username, name).await?;
+
         Ok(())
     }
 
@@ -679,17 +864,22 @@ VALUES($1, $2, $3, $4, $5);
         name: &str,
         image: &str,
     ) -> anyhow::Result<()> {
-        sqlx::query!(
-            "
-UPDATE playlist SET image = $3
-WHERE username = $1 AND name = $2
-            ",
-            BigD::from(username),
-            name,
-            image
-        )
-        .fetch_optional(&mut self.database.acquire().await?)
+        save_playlist_image(username, name, image.to_string()).await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_playlist_image(&self, username: u64, name: &str) -> anyhow::Result<()> {
+        remove_file(&format!(
+            "{}/{}-{}.png",
+            env_fetch!("CDN_DIR"),
+            username,
+            hash(name.as_bytes())
+        ))
         .await?;
+
+        default_playlist_image(username, name).await?;
+
         Ok(())
     }
 
@@ -701,8 +891,13 @@ WHERE username = $1 AND name = $2
     ) -> anyhow::Result<()> {
         sqlx::query!(
             "
-UPDATE playlist SET description = $3
-WHERE username = $1 AND name = $2
+UPDATE 
+    playlist 
+SET 
+    description = $3
+WHERE 
+    username = $1 
+    AND name = $2;
             ",
             BigD::from(username),
             name,
@@ -721,8 +916,13 @@ WHERE username = $1 AND name = $2
     ) -> anyhow::Result<()> {
         sqlx::query!(
             "
-UPDATE playlist SET name = $3
-WHERE username = $1 AND name = $2
+UPDATE 
+    playlist 
+SET 
+    name = $3
+WHERE 
+    username = $1 
+    AND name = $2;
             ",
             BigD::from(username),
             name,
@@ -736,8 +936,11 @@ WHERE username = $1 AND name = $2
     pub async fn delete_playlist(&self, username: u64, playlist_name: &str) -> anyhow::Result<()> {
         sqlx::query!(
             "
-DELETE FROM playlist
-WHERE username = $1 AND name = $2;
+DELETE FROM 
+    playlist
+WHERE 
+    username = $1 
+    AND name = $2;
             ",
             BigD::from(username),
             playlist_name // check if valid playlist
@@ -752,7 +955,15 @@ WHERE username = $1 AND name = $2;
         let output = sqlx::query_as!(
             Exists,
             "
-SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 LIMIT 1);
+SELECT EXISTS(
+    SELECT 
+        1 
+    FROM 
+        auth 
+    WHERE 
+        username = $1 
+    LIMIT 1
+);
             ",
             Some(BigD::from(hash(username.as_bytes())))
         )
@@ -769,7 +980,16 @@ SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 LIMIT 1);
         let result = sqlx::query_as!(
             Exists,
             "
-SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);
+SELECT EXISTS(
+    SELECT 
+        1 
+    FROM 
+        auth 
+    WHERE 
+        username = $1 
+        AND admin = true 
+    LIMIT 1
+);
             ",
             BigD::from(username)
         )
@@ -786,7 +1006,12 @@ SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND admin = true LIMIT 1);
         let data = sqlx::query_as!(
             UserDataBigD,
             r#"
-SELECT (userdata).* FROM auth WHERE username = $1;
+SELECT 
+    (userdata).* 
+FROM 
+    auth 
+WHERE 
+    username = $1;
             "#,
             BigD::from(userhash)
         )
@@ -798,8 +1023,12 @@ SELECT (userdata).* FROM auth WHERE username = $1;
     pub async fn update_login_timestamp(&self, userhash: u64) -> anyhow::Result<()> {
         sqlx::query!(
             "
-UPDATE auth SET last_login = $2 
-WHERE username = $1
+UPDATE 
+    auth 
+SET 
+    last_login = $2 
+WHERE 
+    username = $1;
                 ",
             BigD::from(userhash),
             time!()
@@ -818,7 +1047,16 @@ WHERE username = $1
         let output = sqlx::query_as!(
             Exists,
             "
-SELECT EXISTS(SELECT 1 FROM auth WHERE username = $1 AND password = $2 LIMIT 1);
+SELECT EXISTS(
+    SELECT 
+        1 
+    FROM 
+        auth 
+    WHERE 
+        username = $1 
+        AND password = $2 
+    LIMIT 1
+);
                 ",
             user.username,
             user.password
