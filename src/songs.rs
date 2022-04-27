@@ -1,8 +1,8 @@
-use crate::{env_num_or_default, CACHE_DIR, DB, acquire_db};
+use crate::{acquire_db, env_num_or_default, CACHE_DIR, DB};
 use core::fmt;
 use log::{error, info};
 use seahash::hash;
-use std::{collections::VecDeque, path::PathBuf, fs::read_dir};
+use std::{collections::VecDeque, fs::read_dir, path::PathBuf};
 use tokio::{fs::create_dir_all, process::Command};
 use youtube_dl::{YoutubeDl, YoutubeDlOutput};
 
@@ -110,7 +110,7 @@ impl fmt::Display for SongManagerError {
             Self::MaxFileSizeLimit => write!(f, "Max file size limit reached"),
             Self::QueueLimit => write!(f, "Queue limit reached"),
             Self::FailedToDownload => write!(f, "Failed to download song from url"),
-            Self::InvalidSong => write!(f, "Provided with invalid song")
+            Self::InvalidSong => write!(f, "Provided with invalid song"),
         }
     }
 }
@@ -129,7 +129,7 @@ impl SongManager {
         }
     }
 
-    // TODO  
+    // TODO
     // sound cloud
     pub fn request(&mut self, url: String) -> anyhow::Result<(), SongManagerError> {
         if self.download_queue.len() < env_num_or_default!("QUEUE_LIMIT", 50) as usize {
@@ -146,7 +146,9 @@ impl SongManager {
 
     pub fn list_queue(&self) -> String {
         let mut queue = String::new();
-        self.download_queue.iter().for_each(|x| queue.push_str(&format!("{x} ")));
+        self.download_queue
+            .iter()
+            .for_each(|x| queue.push_str(&format!("{x} ")));
         queue
     }
 
@@ -190,7 +192,7 @@ impl SongManager {
             for song in read_dir(CACHE_DIR.to_owned()).unwrap().flatten() {
                 let name = match song.file_name().to_str().unwrap().parse::<u64>() {
                     Ok(v) => v,
-                    Err(_) => continue 
+                    Err(_) => continue,
                 };
                 let _ = acquire_db!(DB).update_downloaded(name).await;
             }
@@ -205,7 +207,8 @@ impl SongManager {
                     "-o",
                     &song.id.unwrap().to_string(), // FIX this is hashed wrong
                     &song.url.clone().unwrap(),
-                ]).spawn();
+                ])
+                .spawn();
 
             DB.get().await.insert_song(song).await.unwrap();
         }

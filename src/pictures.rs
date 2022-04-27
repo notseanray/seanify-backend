@@ -1,10 +1,10 @@
-use image::{ImageBuffer, GenericImageView};
-use image::DynamicImage::ImageRgba8;
-use log::error;
-use std::env;
 use crate::env_fetch;
-use rand::{Rng, thread_rng};
 use anyhow::anyhow;
+use image::DynamicImage::ImageRgba8;
+use image::{GenericImageView, ImageBuffer};
+use log::error;
+use rand::{thread_rng, Rng};
+use std::env;
 
 // images are squares, they must be rescaled on the client to this size before sending
 const IMAGE_SIZE: usize = 400;
@@ -15,24 +15,26 @@ pub(crate) async fn save_pfp(userhash: u64, data: String) -> anyhow::Result<()> 
 
     let data = match base64::decode(data) {
         Ok(v) => v,
-        Err(_) => return Err(anyhow!("InvalidBase64"))
+        Err(_) => return Err(anyhow!("InvalidBase64")),
     };
+
     let img = image::load_from_memory(&data).unwrap();
     let image = ImageRgba8(img.to_rgba8());
 
     if (IMAGE_SIZE as u32, IMAGE_SIZE as u32) != image.dimensions() {
         return Err(anyhow!("InvalidDimensions"));
     }
+
     match image.save(&format!("{}/{userhash}.png", env_fetch!("CDN_DIR"))) {
         Ok(_) => Ok(()),
-        Err(_) => Err(anyhow!("FailedToSave"))
+        Err(_) => Err(anyhow!("FailedToSave")),
     }
 }
 
 pub(crate) async fn default_pfp(userhash: u64) -> anyhow::Result<()> {
     let mut rng = thread_rng();
     let grid = rng.gen_range(3..=6);
-    
+
     // randomly generate a grid
     let mut indexes = Vec::with_capacity(grid * grid);
     let mut at_least_one = false;
@@ -50,7 +52,12 @@ pub(crate) async fn default_pfp(userhash: u64) -> anyhow::Result<()> {
     }
 
     let mut image_data: Vec<u8> = Vec::with_capacity(640000);
-    let (r, g, b, o) = (userhash % 120 * 2, userhash % 220, userhash % 60 * 3, userhash % 6 * 40);
+    let (r, g, b, o) = (
+        userhash % 120 * 2,
+        userhash % 220,
+        userhash % 60 * 3,
+        userhash % 6 * 40,
+    );
 
     //let split = 160000 / grid;
     for i in 0..160000 {
@@ -69,10 +76,10 @@ pub(crate) async fn default_pfp(userhash: u64) -> anyhow::Result<()> {
     }
 
     let pfp = image::DynamicImage::ImageRgba8(
-        match ImageBuffer::from_raw(IMAGE_SIZE as u32, IMAGE_SIZE as u32, image_data) { 
-            Some(v) => v, 
-            None => return Ok(()) 
-        }
+        match ImageBuffer::from_raw(IMAGE_SIZE as u32, IMAGE_SIZE as u32, image_data) {
+            Some(v) => v,
+            None => return Ok(()),
+        },
     );
 
     pfp.save(&format!("{}/{userhash}.png", env_fetch!("CDN_DIR")))?;

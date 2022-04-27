@@ -6,8 +6,8 @@ use seahash::hash;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
-use sqlx::{ConnectOptions, Executor};
 use sqlx::Pool;
+use sqlx::{ConnectOptions, Executor};
 use std::env::var;
 use std::thread::sleep;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -169,7 +169,7 @@ impl Database {
         Ok(my_pool)
     }
 
-    pub async fn update_downloaded(&self, hash: u64) -> anyhow::Result<()> { 
+    pub async fn update_downloaded(&self, hash: u64) -> anyhow::Result<()> {
         sqlx::query!(
             "
 UPDATE songs SET 
@@ -180,9 +180,9 @@ WHERE id = $1
             BigD::from(hash),
             true,
             time!()
-            )
-            .fetch_optional(&mut self.database.acquire().await?)
-            .await?;
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
 
         Ok(())
     }
@@ -621,11 +621,7 @@ WHERE username = $2 AND name = $3
         Ok(())
     }
 
-    async fn does_playlist_exists(
-        &self, 
-        username: u64, 
-        name: &str
-    ) -> anyhow::Result<bool> {
+    async fn does_playlist_exists(&self, username: u64, name: &str) -> anyhow::Result<bool> {
         let result = sqlx::query_as!(
             Exists,
             "
@@ -656,7 +652,7 @@ SELECT EXISTS(SELECT 1 FROM playlist WHERE username = $1 AND name = $2 LIMIT 1);
         let public_playlist = match public_playlist.to_lowercase().as_str() {
             "true" => true,
             "false" => false,
-            _ => return Err(anyhow!("InvalidMessage"))
+            _ => return Err(anyhow!("InvalidMessage")),
         };
 
         let timestamp = time!();

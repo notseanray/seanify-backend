@@ -1,11 +1,10 @@
-
 mod db;
 mod pictures;
-mod user;
 mod songs;
-use songs::*;
-use pictures::*;
+mod user;
 use db::*;
+use pictures::*;
+use songs::*;
 use user::*;
 
 use crate::user::Playlist;
@@ -13,6 +12,7 @@ use async_once::AsyncOnce;
 use futures_util::{FutureExt, StreamExt};
 use lazy_static::lazy_static;
 use log::{debug, error, info, warn};
+use num_traits::cast::ToPrimitive;
 use serde_json::json;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
@@ -26,7 +26,6 @@ use warp::{
     ws::{Message, WebSocket},
     Filter, Rejection, Reply,
 };
-use num_traits::cast::ToPrimitive;
 
 /*
  * If the variable we want to check is not set, then we'll abort
@@ -299,7 +298,6 @@ macro_rules! disconnect {
     };
 }*/
 
-
 // TODO api calls
 // request profiles
 // request Playlist
@@ -309,11 +307,7 @@ macro_rules! disconnect {
  * then we can just echo the message, this *should* be secure since you can only send to usernames
  * that you are logged in under, but I could be very wrong
  */
-async fn handle_response<'a>(
-    msg: &str,
-    ws_client: &WsClient,
-    clients: &Clients,
-) {
+async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients) {
     if BLOCKED_LIST
         .read()
         .unwrap()
@@ -502,31 +496,29 @@ async fn handle_response<'a>(
                     _ => None,
                 }
             }
-            "RENAME_PLAYLIST" => {
-                match args.len() {
-                    2 => {
-                        match acquire_db!(DB)
-                            .rename_playlist(ws_client.username_hash, args[0], args[1])
-                            .await
-                        {
-                            Ok(()) => Some(String::from("OK")),
-                            Err(_) => Some(String::from("InvalidHash")),
-                        }
+            "RENAME_PLAYLIST" => match args.len() {
+                2 => {
+                    match acquire_db!(DB)
+                        .rename_playlist(ws_client.username_hash, args[0], args[1])
+                        .await
+                    {
+                        Ok(()) => Some(String::from("OK")),
+                        Err(_) => Some(String::from("InvalidHash")),
                     }
-                    _ => None,
                 }
-            }
+                _ => None,
+            },
             "RESET_PFP" => match default_pfp(ws_client.username_hash).await {
-                Ok(_) => { Some(String::from("OK"))},
-                Err(_) => None 
-            }
+                Ok(_) => Some(String::from("OK")),
+                Err(_) => None,
+            },
             "SET_PFP" => match args.len() {
                 1 => match save_pfp(ws_client.username_hash, args[0].to_string()).await {
-                        Ok(_) => Some(String::from("OK")),
-                        Err(_) => None
-                    }
-                _ => None
-            }
+                    Ok(_) => Some(String::from("OK")),
+                    Err(_) => None,
+                },
+                _ => None,
+            },
             "REQUEST_USERDATA" => {
                 // TODO fix
                 match acquire_db!(DB).get_user_data(ws_client.username_hash).await {
@@ -541,16 +533,16 @@ async fn handle_response<'a>(
                 // this is awful but I'll fix it later
                 match acquire_db!(DB).userhash_from_username(args[0]).await {
                     Ok(v) => match acquire_db!(DB).get_user_data(v.to_u64().unwrap()).await {
-                            Ok(v) => match v {
-                                    Some(v) => match v.public_profile {
-                                            Some(true) => Some(serde_json::to_string(&v).unwrap()),
-                                            _ => None
-                                        }
-                                    None => None
-                            }
-                            Err(_) => None
-                        }
-                    Err(_) => None
+                        Ok(v) => match v {
+                            Some(v) => match v.public_profile {
+                                Some(true) => Some(serde_json::to_string(&v).unwrap()),
+                                _ => None,
+                            },
+                            None => None,
+                        },
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
                 }
             }
             "REQUEST_PLAYLIST" => {
@@ -618,7 +610,7 @@ pub async fn run<S: AsRef<str>>(_args: &[S]) -> anyhow::Result<()> {
             ))
             .await;
 
-            tokio::spawn(async move { 
+            tokio::spawn(async move {
                 let mut locked = SONG_MANAGER.write().await;
                 let _ = locked.cycle_queue().await;
             });
@@ -767,7 +759,7 @@ fn check_env_args() -> anyhow::Result<()> {
         "PORT",
         "ADMIN_KEY",
         "RATE_BAN_IN_SECONDS",
-        "RATE_MAX_COUNT"
+        "RATE_MAX_COUNT",
     ];
 
     vars.iter().for_each(|x| check_or_warn_env!(x));

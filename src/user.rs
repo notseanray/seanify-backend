@@ -10,10 +10,10 @@ use tokio::fs::create_dir;
 
 #[derive(Default, Deserialize)]
 pub(crate) struct Playlist {
-    pub name: String, // limit to 30 char
+    pub name: String,                // limit to 30 char
     pub description: Option<String>, // limit to 100 char
     pub image: Option<String>,       // limit to 200 char
-    pub public_playlist: bool
+    pub public_playlist: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
