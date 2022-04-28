@@ -245,12 +245,12 @@ WHERE
             ",
             BigD::from(timestamp)
         )
-            .fetch_all(&mut self.database.acquire().await?)
-            .await?;
+        .fetch_all(&mut self.database.acquire().await?)
+        .await?;
 
         match serde_json::to_string(&data) {
             Ok(v) => Ok(v),
-            Err(_) => Err(anyhow!("FailedToSync"))
+            Err(_) => Err(anyhow!("FailedToSync")),
         }
     }
 
@@ -583,7 +583,8 @@ WHERE
     AND upload_date = $3;
             ",
             song_name,
-            song_author, // refactor? this is misleading as it's the yt uploader NOT the artist/author of song
+            song_author, // refactor? this is misleading as it's the yt uploader NOT the
+            // artist/author of song
             song_release
         )
         .fetch_optional(&mut self.database.acquire().await?)

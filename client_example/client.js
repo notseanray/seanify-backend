@@ -10,7 +10,7 @@ const connection = new WebSocket(url);
 connection.onopen = () => {
 	start = new Date();
 	totalrequest++;
-	connection.send("AUTH s x")
+	connection.send("SIGN kjsfgdsah lasdjfklsdajf s")
 	//connection.send("AUTH nate dumb")
 	connection.send("PING ")
 	connection.send("RESET_PFP ")
