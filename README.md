@@ -32,7 +32,7 @@ If you have any experience with rust or react help would be appreciated!
 * User auth/login system ✓
 * Download single videos (soon playlist too) from youtube via yt-dlp + aria2c ✓
 * Control different players from instances under the same account ✓ (ex: control playback on Desktop from phone)
-* Public profiles, playlist, followers
+* Public profiles, playlist, followers ✓
 * Postgresql data recovery/backup system of some sort, not sure since I'm new to sql/postgres
 * Small tui client in js
 * Usable gui client in react native

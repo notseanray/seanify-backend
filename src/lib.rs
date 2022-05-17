@@ -108,6 +108,7 @@ pub(crate) struct WsClient {
     pub username_hash: u64,
 }
 
+
 // We store the websocket clients in this hashmap, the string being a uuid
 pub(crate) type Clients = Arc<Mutex<HashMap<String, WsClient>>>;
 type Result<T> = std::result::Result<T, Rejection>;
@@ -123,6 +124,7 @@ macro_rules! acquire_db {
     };
 }
 
+// handle any messages that are sent by the client here
 async fn client_msg(client_id: &str, msg: &Message, clients: &Clients) {
     let msg = match msg.to_str() {
         Ok(v) => v,
@@ -414,12 +416,6 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                     }
                 }
                 _ => None,
-            },
-            // return information from the songs table, useful for first client setup and can be
-            // used instead of sync lib with 0 timestamp
-            "SONG_LIST_FULL" => match acquire_db!(DB).get_song_list().await {
-                Ok(v) => Some(v),
-                Err(_) => None,
             },
             // add song to playlist based on playlist_name, song_name, song_author, song_release
             //

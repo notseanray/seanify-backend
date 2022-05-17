@@ -3,9 +3,9 @@ use crate::user::Playlist;
 use crate::{UserData, UserDataBigD};
 use anyhow::anyhow;
 use log::{error, info, LevelFilter};
+use num_traits::ToPrimitive;
 use seahash::hash;
 use serde::Serialize;
-use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, Postgres};
 use sqlx::ConnectOptions;
 use sqlx::Pool;
@@ -100,8 +100,8 @@ struct SongLookupResult {
 
 // result from fetching a song from the database, when a client wants to look up a song it recieves
 // this data
-#[derive(Serialize)]
 pub(crate) struct SongTitleResult {
+    pub id: BigD,
     pub title: String,
     pub uploader: Option<String>,
     pub thumbnail: Option<String>,
@@ -111,6 +111,37 @@ pub(crate) struct SongTitleResult {
     pub creator: Option<String>,
     pub upload_date: Option<String>,
     pub downloaded: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SongTitleResultOut {
+    pub id: String,
+    pub title: String,
+    pub uploader: Option<String>,
+    pub thumbnail: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub artist: Option<String>,
+    pub creator: Option<String>,
+    pub upload_date: Option<String>,
+    pub downloaded: bool,
+}
+
+impl From<SongTitleResult> for SongTitleResultOut {
+    fn from(s: SongTitleResult) -> Self {
+        Self {
+            id: s.id.to_u64().unwrap_or_default().to_string(),
+            title: s.title,
+            uploader: s.uploader,
+            thumbnail: s.thumbnail,
+            album: s.album,
+            album_artist: s.album_artist,
+            artist: s.artist,
+            creator: s.creator,
+            upload_date: s.upload_date,
+            downloaded: s.downloaded
+        } 
+    }
 }
 
 struct SongDetails {
@@ -229,6 +260,7 @@ WHERE
             SongTitleResult,
             "
 SELECT 
+    id,
     title, 
     uploader, 
     thumbnail, 
@@ -247,8 +279,14 @@ WHERE
         )
         .fetch_all(&mut self.database.acquire().await?)
         .await?;
+        let mut songs: Vec<SongTitleResultOut> = Vec::with_capacity(data.len());
+        for song in data {
+            if song.downloaded {
+                songs.push(song.into());
+            }
+        }
 
-        match serde_json::to_string(&data) {
+        match serde_json::to_string(&songs) {
             Ok(v) => Ok(v),
             Err(_) => Err(anyhow!("FailedToSync")),
         }
@@ -538,31 +576,6 @@ WHERE
         .await?;
 
         Ok(())
-    }
-
-    pub async fn get_song_list(&self) -> anyhow::Result<String> {
-        let result = sqlx::query_as!(
-            SongTitleResult,
-            "
-SELECT 
-    title, 
-    uploader, 
-    thumbnail, 
-    album, 
-    album_artist, 
-    artist, 
-    creator, 
-    upload_date, 
-    downloaded 
-FROM 
-    songs;
-                "
-        )
-        .fetch_all(&mut self.database.acquire().await?)
-        .await?;
-
-        let result = json!(&result).to_string();
-        Ok(result)
     }
 
     pub async fn find_song_from_details(

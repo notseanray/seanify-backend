@@ -10,11 +10,13 @@ const connection = new WebSocket(url);
 connection.onopen = () => {
 	start = new Date();
 	totalrequest++;
-	connection.send("SIGN kjsfgdsah lasdjfklsdajf s")
+	//connection.send("SIGN kjsfgdsah lasdjfklsdajf s")
 	//connection.send("AUTH nate dumb")
-	connection.send("PING ")
-	connection.send("RESET_PFP ")
+	connection.send("AUTH sean ray")
+	//connection.send("QUEUE https://www.youtube.com/watch?v=_hZCsgcKa-g")
+	//connection.send("QUEUE https://www.youtube.com/watch?v=j1ZBfxQ8oP0")
 	//connection.send("RESET_PFP ")
+	connection.send("QUEUE_LIST ")
 	connection.send("PING ")
 }
 
