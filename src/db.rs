@@ -273,7 +273,7 @@ SELECT
 FROM 
     songs
 WHERE
-    downloaded_timestamp > $1
+    downloaded_timestamp >= $1
             ",
             BigD::from(timestamp)
         )
@@ -281,9 +281,7 @@ WHERE
         .await?;
         let mut songs: Vec<SongTitleResultOut> = Vec::with_capacity(data.len());
         for song in data {
-            if song.downloaded {
-                songs.push(song.into());
-            }
+            songs.push(song.into());
         }
 
         match serde_json::to_string(&songs) {

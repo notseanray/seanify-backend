@@ -13,10 +13,9 @@ connection.onopen = () => {
 	//connection.send("SIGN kjsfgdsah lasdjfklsdajf s")
 	//connection.send("AUTH nate dumb")
 	connection.send("AUTH sean ray")
-	//connection.send("QUEUE https://www.youtube.com/watch?v=_hZCsgcKa-g")
+	connection.send("SYNC_LIB 0")
 	//connection.send("QUEUE https://www.youtube.com/watch?v=j1ZBfxQ8oP0")
 	//connection.send("RESET_PFP ")
-	connection.send("QUEUE_LIST ")
 	connection.send("PING ")
 }
 
