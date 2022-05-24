@@ -213,6 +213,29 @@ impl Database {
         Ok(my_pool)
     }
 
+    pub async fn request_playlist(&self, userhash: u64, name: &str) -> anyhow::Result<Option<Playlist>> {
+        let playlist = sqlx::query_as!(
+            Playlist,
+            "
+SELECT 
+    name, 
+    description, 
+    public_playlist 
+FROM 
+    Playlist
+WHERE 
+    username = $1
+    AND name = $2;
+            ",
+            BigD::from(userhash),
+            name
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        Ok(playlist)
+    }
+
     pub async fn update_downloaded(&self, hash: u64) -> anyhow::Result<()> {
         sqlx::query!(
             "
@@ -725,6 +748,34 @@ VALUES($1, $2, $3, $4, $5);
             song.id,
             song.title,
             time!()
+        )
+        .fetch_optional(&mut self.database.acquire().await?)
+        .await?;
+
+        self.update_playlist_timestamp(username, playlist_name)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_song_from_hash (
+        &self,
+        username: u64,
+        playlist_name: &str,
+        song_hash: u64
+    ) -> anyhow::Result<()> {
+        sqlx::query!(
+            "
+DELETE FROM 
+    playlistdata
+WHERE 
+    username = $1 
+    AND playlist_name = $2 
+    AND song_hash = $3;
+            ",
+            BigD::from(username),
+            playlist_name, // check if valid playlist
+            BigD::from(song_hash),
         )
         .fetch_optional(&mut self.database.acquire().await?)
         .await?;

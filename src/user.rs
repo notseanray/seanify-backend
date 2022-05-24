@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 // To insert into postgres they must be of all optional type which is slightly inconvient
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 pub(crate) struct Playlist {
     pub name: String,                // limit to 30 char
     pub description: Option<String>, // limit to 100 char

@@ -455,6 +455,23 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                 },
                 _ => None,
             },
+            // similar to above but directly uses the hash if the client has a local copy of the
+            // hashes
+            "REMOVE_SONG_HASH" => match args.len() {
+                3 => match args[1].parse::<u64>() {
+                    Ok(v) => {
+                        match acquire_db!(DB)
+                            .append_song_from_hash(ws_client.username_hash, args[0], v)
+                            .await
+                        {
+                            Ok(()) => Some(String::from("OK")),
+                            Err(_) => Some(String::from("InvalidHash")),
+                        }
+                    }
+                    Err(_) => Some(String::from("ExpectedHash")),
+                },
+                _ => None,
+            },
             // create a new playlist assigning it a name and marking if it's public or not with
             // "true" or "false"
             // ^ not caps sensitive
@@ -612,8 +629,10 @@ async fn handle_response<'a>(msg: &str, ws_client: &WsClient, clients: &Clients)
                 }
             }
             "REQUEST_PLAYLIST" => {
-                unimplemented!();
-                // TODO
+                match acquire_db!(DB).request_playlist(ws_client.username_hash, &args[0].replace('%', "")).await {
+                    Ok(v) => Some(json!(v).to_string()),
+                    Err(_) => None
+                }
             }
             "UPDATE_USERDATA" => match args.len() {
                 3.. => {

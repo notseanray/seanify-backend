@@ -42,4 +42,4 @@ profile-rustflags = [
 ]
 strip = true
 panic = "abort"
-symbols = "stri"
+lto = "fat"
